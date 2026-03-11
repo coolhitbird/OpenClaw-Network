@@ -1,0 +1,37 @@
+# OpenClaw Network - Git Ignore
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+.idea/
+.vscode/
+
+# Config with secrets
+config.json
+secrets.json
+credentials.json
+.env
+
+# Data
+data/
+logs/
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Test files
+test_*.md
+test_*.py
+
+# Temporary
+temp/
+.temp/
+
+# OpenClaw Network specific
+node_id_*.txt  # 本地生成的 node_id 缓存
