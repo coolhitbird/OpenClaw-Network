@@ -17,10 +17,16 @@ import json
 import logging
 import signal
 import sys
+import base64
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Set, Optional
 import argparse
 import websockets
+
+from adapter.crypto import CryptoManager
+from adapter.node_id import load_or_generate_node_id, generate_node_id
+from cryptography.hazmat.primitives import serialization
 
 # 配置日志（UTF-8 safe）
 logging.basicConfig(
@@ -36,19 +42,42 @@ class Peer:
     websocket: websockets.WebSocketServerProtocol
     node_id: str
     remote_addr: tuple
-    # 可扩展：公钥、验证状态等
+    # Phase 3: 加密状态
+    crypto: Optional['CryptoManager'] = None
+    encryption_mode: str = "optional"  # required|optional|disabled
 
 class ClawMeshServer:
     """ClawMesh WebSocket 服务器"""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765, max_connections: int = 100):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8765, max_connections: int = 100, node_id: Optional[str] = None):
         self.host = host
         self.port = port
         self.max_connections = max_connections
+        self.node_id = node_id or self._load_or_generate_node_id()
         self.connections: Dict[str, Peer] = {}  # node_id -> Peer
         self.websocket_to_peer: Dict[websockets.WebSocketServerProtocol, Peer] = {}
         self.shutdown_flag = False
         self._server: Optional[websockets.WebSocketServer] = None
+        self._config_encryption_required = True  # Phase 3: require encryption by default
+        self._config_encryption_required = True  # Phase 3: 默认要求加密
+
+    def _load_or_generate_node_id(self) -> str:
+        """加载或生成 node_id"""
+        from adapter.node_id import generate_node_id, load_or_generate_node_id
+        # 尝试从 config/node_id.txt 加载
+        config_path = Path("config") / "node_id.txt"
+        try:
+            return load_or_generate_node_id(str(config_path) if config_path.exists() else None)
+        except:
+            return generate_node_id()
+    
+    def server_supports_encryption(self) -> bool:
+        """服务器是否支持加密"""
+        return True  # Phase 3 默认支持
+    
+    def _get_own_node_id(self) -> str:
+        """获取服务器 node_id"""
+        return self.node_id
 
     async def start(self):
         """启动服务器"""
@@ -81,7 +110,7 @@ class ClawMeshServer:
 
         peer: Optional[Peer] = None
         try:
-            # 第一步：接收 handshake 消息
+            # 第一步：接收 handshake 消息（明文或已加密？始终明文 handshake）
             raw = await websocket.recv()
             try:
                 msg = json.loads(raw)
@@ -97,13 +126,65 @@ class ClawMeshServer:
                 return
 
             node_id = msg.get("node_id")
-            public_key = msg.get("public_key")  # Phase 3 使用
-            signature = msg.get("signature")    # Phase 3 使用
+            client_pubkey_b64 = msg.get("public_key")
+            client_encryption_mode = msg.get("encryption_mode", "optional")
 
             if not node_id:
                 logger.error(f"Handshake missing node_id from {remote_addr}")
                 await websocket.close(code=1003, reason="Missing node_id")
                 return
+
+            # Phase 3: 处理 ECDH 密钥交换
+            encryption_mode = "optional"  # server 偏好（可配置）
+            client_crypto: Optional[CryptoManager] = None
+            
+            if client_pubkey_b64 and self.server_supports_encryption():
+                try:
+                    client_pubkey_bytes = base64.b64decode(client_pubkey_b64)
+                    
+                    # 创建 server 端 CryptoManager
+                    server_crypto = CryptoManager(self._get_own_node_id())
+                    server_crypto.generate_keypair()
+                    
+                    # 计算共享密钥
+                    server_crypto.compute_shared_secret(client_pubkey_bytes)
+                    server_crypto.derive_encryption_key(server_crypto.compute_shared_secret(client_pubkey_bytes))
+                    
+                    # 协商加密模式
+                    if client_encryption_mode == "required" and not self.server_supports_encryption():
+                        # 客户端要求加密但服务器不支持
+                        await websocket.send(json.dumps({
+                            "type": "node.handshake_ack",
+                            "node_id": self._get_own_node_id(),
+                            "encryption_mode": "unsupported",
+                            "reason": "Server does not support encryption"
+                        }))
+                        await websocket.close(code=1003, reason="Encryption required but not supported")
+                        return
+                    
+                    encryption_mode = "required" if self.server_supports_encryption() else "optional"
+                    
+                    # 指纹验证（可选）
+                    server_fingerprint = server_crypto.compute_fingerprint()
+                    # TODO: 保存 client public key 用于后续验证
+                    
+                except Exception as e:
+                    logger.error(f"ECDH handshake failed: {e}")
+                    await websocket.close(code=1003, reason="Invalid encryption key")
+                    return
+            else:
+                # 明文 handshake 或客户端不支持加密
+                if self.config.encryption_required and client_encryption_mode != "fallback":
+                    await websocket.send(json.dumps({
+                        "type": "node.handshake_ack",
+                        "node_id": self._get_own_node_id(),
+                        "encryption_mode": "unsupported",
+                        "reason": "Server requires encryption"
+                    }))
+                    await websocket.close(code=1003, reason="Encryption required")
+                    return
+                encryption_mode = "disabled"
+                server_crypto = None
 
             # 检查 node_id 是否已存在
             if node_id in self.connections:
@@ -113,24 +194,34 @@ class ClawMeshServer:
                 self._remove_peer(old_peer)
 
             # 创建 Peer 记录
-            peer = Peer(websocket=websocket, node_id=node_id, remote_addr=remote_addr)
+            peer = Peer(
+                websocket=websocket,
+                node_id=node_id,
+                remote_addr=remote_addr,
+                crypto=server_crypto,
+                encryption_mode=encryption_mode
+            )
             self.connections[node_id] = peer
             self.websocket_to_peer[websocket] = peer
 
-            logger.info(f"Node {node_id} connected (total: {len(self.connections)})")
+            logger.info(f"Node {node_id} connected (encryption={encryption_mode}, total: {len(self.connections)})")
 
             # 发送 handshake_ack
+            # Phase 3: 如果支持加密，附带 server 公钥和指纹
+            import base64
             ack = {
                 "type": "node.handshake_ack",
-                "node_id": self._get_own_node_id(),  # 需要配置或生成
-                "public_key": None,  # Phase 3 生成
-                "fingerprint": "00000000",  # Phase 3 计算
-                "trusted": True  # Phase 1 简化
+                "node_id": self._get_own_node_id(),
+                "public_key": base64.b64encode(server_crypto.key_pair.public_key().public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.CompressedPoint
+                )).decode('ascii') if server_crypto else None,
+                "fingerprint": server_crypto.compute_fingerprint() if server_crypto else None,
+                "trusted": True,
+                "encryption_mode": encryption_mode
             }
             await websocket.send(json.dumps(ack))
-
-            # 广播新节点加入（可选，Phase 4 频道功能）
-            # await self.broadcast({"type": "node.announce_join", "node_id": node_id}, exclude=node_id)
+            logger.debug(f"Sent handshake_ack to {node_id} (encryption_mode={encryption_mode})")
 
             # 主消息循环
             await self.handle_peer_messages(peer)
@@ -149,6 +240,27 @@ class ClawMeshServer:
         async for raw in peer.websocket:
             try:
                 msg = json.loads(raw)
+                
+                # Phase 3: 解密 inbound 消息（如果加密）
+                payload = msg.get("payload", {})
+                if payload.get("encrypted", False):
+                    if not peer.crypto:
+                        logger.warning(f"Received encrypted message from {peer.node_id} but no crypto available")
+                        await peer.websocket.close(code=1003, reason="Encrypted message but no session key")
+                        return
+                    try:
+                        # 解密 payload（需要将 payload 对象转为 JSON 字符串再解密）
+                        import json as _json
+                        payload_json = _json.dumps(payload, ensure_ascii=False)
+                        decrypted_json = peer.crypto.decrypt_message({"content": payload["content"]})
+                        # 替换 payload 为解密后的对象
+                        msg["payload"] = _json.loads(decrypted_json)
+                        logger.debug(f"Decrypted message from {peer.node_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt message from {peer.node_id}: {e}")
+                        await peer.websocket.close(code=1003, reason="Decryption failed")
+                        return
+                
                 # 提取消息类型：从 payload.type 获取
                 payload = msg.get("payload", {})
                 msg_type = payload.get("type")

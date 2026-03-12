@@ -1,5 +1,5 @@
 """
-OpenClaw Network - ClawMesh WebSocket Client (Phase 1)
+OpenClaw Network - ClawMesh WebSocket Client (Phase 1 + Phase 3 Crypto)
 
 异步 WebSocket 客户端，用于节点间通信和 handshake 发起。
 
@@ -10,8 +10,13 @@ Phase 1 特性:
 - 发送/接收消息
 - 自动重连（Basic）
 
+Phase 3 特性:
+- ECDH 密钥交换
+- AES-GCM 消息加密
+- 指纹验证
+
 运行: uv run python node/client.py <server-url> [--node-id EXISTING_ID]
-示例: uv run python node/client.py ws://localhost:8765
+示例: uv run python node/client.py ws://localhost:12448
 """
 
 import asyncio
@@ -19,9 +24,13 @@ import json
 import logging
 import sys
 import argparse
+import base64
+from pathlib import Path
 from typing import Optional
 import websockets
 import websockets
+
+from adapter.crypto import CryptoManager, get_trusted_fingerprints
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,9 +49,13 @@ class ClawMeshClient:
         self.connected = asyncio.Event()
         self.shutdown = False
         self._reconnect_delay = 5  # seconds
+        # Phase 3: 加密状态
+        self.crypto: Optional[CryptoManager] = None
+        self.encryption_mode: str = "optional"
+        self.trusted_fingerprints = get_trusted_fingerprints()
 
     async def connect(self):
-        """连接到服务器"""
+        """连接到服务器（支持加密 handshake）"""
         logger.info(f"Connecting to {self.server_url} as {self.node_id}")
         while not self.shutdown:
             try:
@@ -54,15 +67,20 @@ class ClawMeshClient:
                 self.connected.set()
                 logger.info("Connected successfully")
 
-                # 发送 handshake
+                # Phase 3: 生成临时 ECDH 密钥对
+                client_crypto = CryptoManager(self.node_id)
+                client_pubkey_bytes = client_crypto.generate_keypair()
+                client_pubkey_b64 = base64.b64encode(client_pubkey_bytes).decode('ascii')
+                
+                # 发送 handshake（包含公钥，要求加密）
                 handshake = {
                     "type": "node.handshake",
                     "node_id": self.node_id,
-                    "public_key": None,  # Phase 3
-                    "signature": None   # Phase 3
+                    "public_key": client_pubkey_b64,
+                    "encryption_mode": "required"
                 }
                 await self.websocket.send(json.dumps(handshake))
-                logger.info("Handshake sent")
+                logger.info(f"Handshake sent (fingerprint: {client_crypto.fingerprint})")
 
                 # 等待 handshake_ack
                 raw = await self.websocket.recv()
@@ -78,36 +96,89 @@ class ClawMeshClient:
                     await self.websocket.close()
                     continue
 
-                # TODO: Phase 3 验证 fingerprint 和 signature
-                logger.info(f"Handshake complete. Server: {ack.get('node_id')}, trusted: {ack.get('trusted')}")
+                server_encryption_mode = ack.get("encryption_mode", "optional")
+                server_pubkey_b64 = ack.get("public_key")
+                server_fingerprint = ack.get("fingerprint")
+                
+                # 检查加密模式
+                if handshake["encryption_mode"] == "required" and server_encryption_mode != "required":
+                    logger.error(f"Server requires encryption but mode={server_encryption_mode}")
+                    await self.websocket.close()
+                    continue
+                
+                self.encryption_mode = server_encryption_mode
+                
+                # 计算共享密钥
+                if server_pubkey_b64 and server_encryption_mode != "disabled":
+                    try:
+                        server_pubkey_bytes = base64.b64decode(server_pubkey_b64)
+                        client_crypto.compute_shared_secret(server_pubkey_bytes)
+                        client_crypto.derive_encryption_key(client_crypto.compute_shared_secret(server_pubkey_bytes))
+                        self.crypto = client_crypto
+                        logger.info(f"Encryption handshake complete, server fingerprint: {server_fingerprint}")
+                        
+                        # 指纹验证
+                        if server_fingerprint:
+                            expected = self.trusted_fingerprints.get(ack.get("node_id"))
+                            if expected:
+                                if expected != server_fingerprint:
+                                    logger.warning(f"Fingerprint mismatch! stored={expected}, got={server_fingerprint}")
+                            else:
+                                # 首次连接，存储指纹（生产环境应询问用户）
+                                logger.warning(f"First connection to {ack.get('node_id')}, accepting fingerprint: {server_fingerprint}")
+                                self.trusted_fingerprints.set(ack.get("node_id"), server_fingerprint)
+                    except Exception as e:
+                        logger.error(f"ECDH failed: {e}")
+                        await self.websocket.close()
+                        continue
+                else:
+                    logger.warning("Encryption disabled (server does not support)")
+                    self.crypto = None
 
-                # 进入消息循环
-                await self.message_loop()
+                # Handshake 完成，进入消息接收循环
+                await self._receive_loop()
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
-                logger.warning(f"Connection lost: {e}")
                 self.connected.clear()
                 if not self.shutdown:
-                    logger.info(f"Reconnecting in {self._reconnect_delay}s...")
+                    logger.warning(f"Connection lost, retrying in {self._reconnect_delay}s...")
                     await asyncio.sleep(self._reconnect_delay)
             except Exception as e:
-                logger.error(f"Unexpected error: {e}", exc_info=True)
+                logger.error(f"Unexpected error in connect loop: {e}", exc_info=True)
                 if not self.shutdown:
                     await asyncio.sleep(self._reconnect_delay)
 
-    async def message_loop(self):
-        """接收服务器消息"""
+    async def _receive_loop(self):
+        """接收服务器消息（支持解密）"""
         try:
             async for raw in self.websocket:
                 try:
                     msg = json.loads(raw)
+                    
+                    # Phase 3: 解密 payload（如果加密）
+                    payload = msg.get("payload", {})
+                    if payload.get("encrypted", False):
+                        if not self.crypto:
+                            logger.warning("Received encrypted message but no crypto")
+                            await self.websocket.close(code=1003, reason="No encryption session")
+                            return
+                        try:
+                            import json as _json
+                            decrypted = self.crypto.decrypt_message({"content": payload["content"]})
+                            msg["payload"] = _json.loads(decrypted)
+                            logger.debug("Decrypted inbound message")
+                        except Exception as e:
+                            logger.error(f"Decryption failed: {e}")
+                            await self.websocket.close(code=1003, reason="Decryption error")
+                            return
+                    
                     msg_type = msg.get("type")
                     logger.debug(f"Received: {msg_type}")
 
                     if msg_type == "message":
                         await self.handle_message(msg)
                     elif msg_type == "node.handshake_ack":
-                        logger.info("Received extra handshake_ack (should be one-time)")
+                        logger.info("Received extra handshake_ack (ignored)")
                     elif msg_type == "node.pong":
                         logger.debug("Pong received")
                     else:
@@ -126,21 +197,34 @@ class ClawMeshClient:
         logger.info(f"[FROM {sender}]: {content}")
 
     async def send_message(self, to: str, content: str, msg_type: str = "text"):
-        """发送消息到指定节点或广播"""
+        """发送消息到指定节点或广播（支持加密）"""
+        payload = {
+            "type": msg_type,
+            "content": content,
+            "encrypted": False
+        }
+        
+        # Phase 3: 如果加密会话建立，加密 payload
+        if self.crypto and self.encryption_mode != "disabled":
+            try:
+                import json as _json
+                payload_json = _json.dumps(payload, ensure_ascii=False)
+                encrypted = self.crypto.encrypt_message(payload_json)
+                payload = encrypted
+            except Exception as e:
+                logger.error(f"Failed to encrypt message: {e}")
+                return False
+        
         msg = {
             "meta": {
                 "node_id": self.node_id,
                 "timestamp": int(asyncio.get_event_loop().time()),
                 "protocol_version": "1.0"
             },
-            "payload": {
-                "type": msg_type,
-                "content": content,
-                "encrypted": False  # Phase 3
-            },
+            "payload": payload,
             "routing": {
                 "to": to,
-                "hops": []  # Phase 4 中继
+                "hops": []
             }
         }
         data = json.dumps(msg)
@@ -149,16 +233,13 @@ class ClawMeshClient:
             try:
                 await self.websocket.send(data)
                 logger.debug(f"Sent to {to}: {content[:50]}")
+                return True
             except websockets.exceptions.ConnectionClosed as e:
                 logger.error(f"Send failed: connection closed - {e}")
-                self.connected.clear()
-                raise ConnectionError("Not connected") from e
-            except Exception as e:
-                logger.error(f"Send failed: {e}")
-                raise
+                return False
         else:
-            logger.error("Cannot send: not connected")
-            raise ConnectionError("Not connected")
+            logger.warning("Cannot send: not connected")
+            return False
 
     async def broadcast(self, content: str):
         """广播消息"""
@@ -168,6 +249,10 @@ class ClawMeshClient:
         """关闭连接"""
         self.shutdown = True
         if self.websocket:
+            try:
+                await self.websocket.close()
+            except:
+                pass
             await self.websocket.close()
         logger.info("Client stopped")
 

@@ -1,11 +1,18 @@
 """
-ClawMesh - Connection Pool (Phase 2)
+ClawMesh - Connection Pool (Phase 2 + Phase 3 Crypto)
 
 连接池管理：管理 outgoing 连接（主动连接他人），包括自动重连、心跳、LRU 驱逐。
 
-模块结构：
-- OutgoingConnection: 单个连接生命周期管理
-- ConnectionPool: 池化管理、广播、维护任务
+Phase 2 特性:
+- 连接池管理
+- 自动重连（指数退避）
+- 心跳监控
+- 带宽限制
+
+Phase 3 特性 (加密):
+- ECDH 密钥协商（P-256）
+- AES-GCM 消息加密/解密
+- 指纹验证
 """
 
 import asyncio
@@ -18,6 +25,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from .message import Message, create_ping, create_pong
+from .crypto import CryptoManager, CryptoConfig as CryptoConfigSpec
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +46,12 @@ class ConnectionConfig:
     connect_timeout: float = 5.0          # 连接超时（秒）
     bandwidth_limit_kbps: int = 100       # 出站带宽限制（KB/s）
     bandwidth_burst_kbps: int = 200       # 突发带宽（KB/s）
+    
+    # Phase 3: Encryption
+    encryption_required: bool = True      # 强制加密连接
+    allow_fallback: bool = False          # 允许降级明文（仅警告）
+    fingerprint_verification: bool = True # 启用指纹验证
+    trusted_fingerprints_file: str = "config/trusted_fingerprints.json"  # 信任指纹存储
 
 @dataclass
 class ConnectionState:
@@ -77,7 +91,12 @@ class OutgoingConnection:
     _connect_task: Optional[asyncio.Task] = None
     _heartbeat_task: Optional[asyncio.Task] = None
     _shutdown: asyncio.Event = field(default_factory=asyncio.Event)
-
+    
+    # Phase 3: 加密管理
+    crypto: Optional[CryptoManager] = None
+    encryption_mode: str = "optional"  # "required" | "optional" | "disabled"
+    handshake_complete: bool = False
+    
     # 统计
     total_attempts: int = 0
     successful_connections: int = 0
@@ -152,6 +171,7 @@ class OutgoingConnection:
             return False
 
         try:
+            # 序列化消息
             if isinstance(msg, Message):
                 data = msg.to_json()
             else:
