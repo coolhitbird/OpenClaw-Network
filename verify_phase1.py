@@ -14,7 +14,16 @@ import asyncio
 import sys
 import subprocess
 import time
+import logging
 from pathlib import Path
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
 # Add project path
 sys.path.insert(0, str(Path(__file__).parent))
