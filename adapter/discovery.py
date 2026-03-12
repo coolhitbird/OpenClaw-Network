@@ -229,8 +229,10 @@ class UDPBroadcaster:
             self._listening = True
             logger.info(f"UDP broadcaster listening on port {self.config.udp_port}")
         except OSError as e:
-            logger.error(f"Failed to start UDP broadcaster: {e} (port {self.config.udp_port} may be in use or blocked)")
-            raise
+            # 端口占用或权限问题，记录但不抛出（允许继续无 UDP 模式）
+            logger.warning(f"Failed to start UDP broadcaster on port {self.config.udp_port}: {e}. Continuing without UDP discovery.")
+            self._listening = False
+            raise  # 仍然抛出，让调用方决定是否处理
 
     async def stop(self):
         """停止 UDP 监听"""
@@ -435,28 +437,28 @@ class NodeRegistry:
         for node in self.loader.list_presets():
             nodes.append(node)
 
-        # 获取发现节点（支持 TTL 过滤）
-        ttl = None if include_expired else getattr(self.config, 'discovery_ttl', 60.0)
-        discovered = self.discovery.get_discovered(ttl=ttl)
-
-        for node_id, node in discovered.items():
-            if node_id in preset_ids:
-                # 冲突检查
-                preset_node = self.loader.presets[node_id]
-                if preset_node.address != node.address:
-                    conflict = {
-                        "node_id": node_id,
-                        "preset_address": preset_node.address,
-                        "udp_address": node.address,
-                        "timestamp": time.time()
-                    }
-                    self._conflict_log.append(conflict)
-                    logger.warning(
-                        f"Node {node_id} 地址冲突：预设={preset_node.address} UDP={node.address}，使用预设"
-                    )
-                # 跳过 UDP 副本
-                continue
-            nodes.append(node)
+        # 添加发现节点（如果 discovery 存在）
+        if self.discovery is not None:
+            ttl = None if include_expired else self.config.discovery_ttl
+            discovered = self.discovery.get_discovered(ttl=ttl)
+            for node_id, node in discovered.items():
+                if node_id in preset_ids:
+                    # 冲突检查
+                    preset_node = self.loader.presets[node_id]
+                    if preset_node.address != node.address:
+                        conflict = {
+                            "node_id": node_id,
+                            "preset_address": preset_node.address,
+                            "udp_address": node.address,
+                            "timestamp": time.time()
+                        }
+                        self._conflict_log.append(conflict)
+                        logger.warning(
+                            f"Node {node_id} 地址冲突：预设={preset_node.address} UDP={node.address}，使用预设"
+                        )
+                    # 跳过 UDP 副本
+                    continue
+                nodes.append(node)
 
         return nodes
 
@@ -472,9 +474,12 @@ class NodeRegistry:
         if preset:
             return preset
 
-        # 其次发现
-        discovered = self.discovery.get_discovered()
-        return discovered.get(node_id)
+        # 其次发现（如果 discovery 存在）
+        if self.discovery is not None:
+            discovered = self.discovery.get_discovered()
+            return discovered.get(node_id)
+
+        return None
 
     def get_conflicts(self) -> List[Dict]:
         """获取冲突记录"""

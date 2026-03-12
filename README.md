@@ -53,12 +53,12 @@ uv sync  # 或: uv pip install websockets
 
 ```bash
 # 终端 1
-uv run python node/server.py --host 0.0.0.0 --port 8765
+uv run python node/server.py --host 0.0.0.0 --port 12448
 ```
 
 输出:
 ```
-2026-03-12 10:30:00 [INFO] Starting ClawMesh server on 0.0.0.0:8765
+2026-03-12 10:30:00 [INFO] Starting ClawMesh server on 0.0.0.0:12448
 2026-03-12 10:30:00 [INFO] Server started, waiting for connections...
 ```
 
@@ -66,7 +66,7 @@ uv run python node/server.py --host 0.0.0.0 --port 8765
 
 ```bash
 # 终端 2
-uv run python examples/demo.py --server ws://localhost:8765
+uv run python examples/demo.py --server ws://localhost:12448
 ```
 
 输出示例:

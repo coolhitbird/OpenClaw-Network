@@ -74,7 +74,7 @@
   "bootstrap": [
     {
       "node_id": "CL-01S-5f3a1b2c-5a3a-0000-be3400",
-      "address": "ws://123.45.67.89:8765",
+      "address": "ws://123.45.67.89:12448",
       "description": "Bootstrap node 1",
       "tags": ["bootstrap", " stable"]
     }
@@ -112,7 +112,7 @@
   {
     "type": "discovery.response",
     "node_id": "CL-01S-...",
-    "ws_address": "ws://192.168.1.100:8765",
+    "ws_address": "ws://192.168.1.100:12448",
     "public_key": "base64...",  // Phase 3
     "timestamp": 1234567890
   }
@@ -143,7 +143,7 @@
 {
   "type": "discovery.response",
   "node_id": "CL-01S-5f3a1b2c-5a3a-0000-be3400",
-  "ws_address": "ws://192.168.1.100:8765",
+  "ws_address": "ws://192.168.1.100:12448",
   "nonce": "a1b2c3d4e5f6...",  // 回声相同 nonce
   "timestamp": 1743673200
 }
