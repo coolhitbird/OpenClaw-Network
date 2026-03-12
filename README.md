@@ -135,11 +135,18 @@ projects/ClawMesh/
 
 **需决策**: 预设 vs UDP 冲突优先级、失败重试策略、连接池满处理
 
-### Phase 3: 加密与安全 (Week 3)
-- [ ] ECDH 密钥交换 (Curve25519)
-- [ ] AES-256-GCM 加密
-- [ ] Ed25519 签名
-- [ ] 指纹人工验证
+### Phase 3: 加密与安全 (Week 3) - 🔄 Day 2 完成
+
+**详细设计**: [`design_phase3.md`](design_phase3.md)
+
+- [x] ECDH 密钥交换 (P-256)
+- [x] AES-256-GCM 消息加密
+- [x] 公钥指纹计算与验证
+- [x] handshake 加密集成 (server/client)
+- [ ] 指纹验证 UX 改进（首次确认提示）
+- [ ] `examples/multi_node_demo.py` 加密支持
+- [ ] 手动 3-node 验证
+- [ ] 更新本文档
 
 ### Phase 4: 频道与 Mesh (Week 4)
 - [ ] 频道（群组）概念

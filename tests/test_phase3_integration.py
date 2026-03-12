@@ -106,9 +106,9 @@ async def test_fingerprint_verification():
         print("[OK] TrustedFingerprints store")
         return True
 
-async def test_encrypted_broadcast_roundtrip():
-    """Test that encrypted broadcast is delivered and decrypted"""
-    port = 12450
+async def test_encrypted_message_routing():
+    """Test that server routes encrypted messages between clients"""
+    port = 12451
     server, server_task = await run_server(port)
     
     try:
@@ -116,44 +116,45 @@ async def test_encrypted_broadcast_roundtrip():
         client_a = ClawMeshClient("CLIENT-A", f"ws://127.0.0.1:{port}")
         client_b = ClawMeshClient("CLIENT-B", f"ws://127.0.0.1:{port}")
         
-        # Connect both
-        await asyncio.gather(
-            asyncio.wait_for(client_a.connect(), timeout=5),
-            asyncio.wait_for(client_b.connect(), timeout=5)
-        )
-        await asyncio.sleep(1)
+        # Start connections in background (they run indefinitely)
+        task_a = asyncio.create_task(client_a.connect())
+        task_b = asyncio.create_task(client_b.connect())
         
-        assert client_a.crypto is not None
-        assert client_b.crypto is not None
+        # Wait for handshake to complete
+        await asyncio.sleep(2)
         
-        # Client A broadcasts; Server should forward to B
-        # We'll capture B's received message by temporarily overriding handle_message
-        received = []
-        async def capture(msg):
-            sender = msg.get("meta", {}).get("node_id")
-            content = msg.get("payload", {}).get("content", "")
-            received.append((sender, content))
-            # Also call original handle_message logic? We'll skip actual output
-        # Instead we can check B's outbound: B will receive the broadcast and our client B's handle_message will log
-        # For test simplicity, we'll send a direct message to B via server
+        # Verify both clients have encryption
+        assert client_a.crypto is not None, "Client A should have crypto"
+        assert client_b.crypto is not None, "Client B should have crypto"
+        assert client_a.encryption_mode == "required"
+        assert client_b.encryption_mode == "required"
         
-        # Actually easier: send direct message from A to B (server will route)
-        await client_a.send_message("CLIENT-B", "Hello B from A")
+        # Client A sends direct message to B via server
+        sent = await client_a.send_message("CLIENT-B", "Hello B from A")
+        assert sent is True, "A->B message should send"
         await asyncio.sleep(0.5)
         
-        # Can't easily inspect B's received without patching; check server connections count and that message was sent
-        # We'll verify by checking that server knows about both
-        assert len(server.connections) == 2
-        
-        # Cleanup
-        client_a.shutdown = True
-        client_b.shutdown = True
+        # Client B sends broadcast to all (including A)
+        await client_b.broadcast("Hello all from B")
         await asyncio.sleep(0.5)
         
-        print("[OK] Encrypted broadcast/direct roundtrip")
+        # Server should still have both connections
+        assert len(server.connections) == 2, f"Server should have 2 connections, got {len(server.connections)}"
+        
+        print("[OK] Encrypted message routing (A->B + broadcast)")
         return True
         
     finally:
+        # Cleanup
+        client_a.shutdown = True
+        client_b.shutdown = True
+        task_a.cancel()
+        task_b.cancel()
+        try:
+            await asyncio.gather(task_a, task_b, return_exceptions=True)
+        except:
+            pass
+        await asyncio.sleep(0.3)
         server.shutdown_flag = True
         server_task.cancel()
         try:
@@ -169,7 +170,7 @@ if __name__ == "__main__":
     tests = [
         ("Encrypted handshake+message", test_encrypted_handshake_and_message),
         ("Fingerprint store", test_fingerprint_verification),
-        ("Encrypted message routing", test_encrypted_broadcast_roundtrip),
+        ("Encrypted message routing", test_encrypted_message_routing),
     ]
     
     passed = 0
