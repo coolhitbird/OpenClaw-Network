@@ -123,10 +123,17 @@ projects/ClawMesh/
 - [ ] 文档完善
 
 ### Phase 2: 节点发现与连接池 (Week 2)
-- [ ] 预设节点列表加载
-- [ ] UDP 广播发现
-- [ ] 自动重连机制
-- [ ] 连接状态监控
+
+**详细设计**: [`design_phase2.md`](design_phase2.md)
+
+- [ ] 预设节点列表加载 (`config/known_nodes.json`)
+- [ ] UDP 广播发现 (port 9876)
+- [ ] 连接池管理 (`ConnectionPool`, 上限 50)
+- [ ] 自动重连（指数退避，最多 5 次）
+- [ ] 连接状态监控（心跳 30s）
+- [ ] 多节点演示 (`examples/multi_node_demo.py`)
+
+**需决策**: 预设 vs UDP 冲突优先级、失败重试策略、连接池满处理
 
 ### Phase 3: 加密与安全 (Week 3)
 - [ ] ECDH 密钥交换 (Curve25519)

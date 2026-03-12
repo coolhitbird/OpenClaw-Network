@@ -183,13 +183,34 @@
 
 | Phase | 目标 | 时间 | 状态 |
 |-------|------|------|------|
-| 1 | node_id + WebSocket + 1对1 明文 | 2-3 天 | ⏳ Day 1 |
+| 1 | node_id + WebSocket + 1对1 明文 | 2-3 天 | ✅ Done |
 | 2 | 发现协议（预设+广播）+ 连接池 | 1-2 天 | 📋 Planned |
 | 3 | ECDH+AES 加密 + 签名验证 | 2 天 | 📋 Planned |
 | 4 | 频道（群组）+ Mesh | 2 天 | 📋 Planned |
 | 5 | 富媒体 + 分片 + 资源控制 | 1-2 天 | 📋 Planned |
 | 6 | OpenClaw Skill 封装 + API | 1 天 | 📋 Planned |
 | 7 | 测试与优化 | 1-2 天 | 📋 Planned |
+
+---
+
+## 5. Phase 2 - 节点发现与连接池（详细设计见 `design_phase2.md`）
+
+**关键设计决策**:
+- **预设列表**: `config/known_nodes.json` 存储 bootstrap 和已知 peers
+- **UDP 广播**: 端口 9876，请求/响应协议
+- **连接池**: `ConnectionPool` 管理 outgoing 连接（上限 50）
+- **心跳**: 30s 间隔，10s 超时
+- **重连**: 指数退避，最多 5 次
+
+**待定事项**（需主人决策，详见 `design_phase2.md` Section 11）:
+1. 预设 vs UDP 冲突优先级（P0）
+2. 重连失败后是否永久放弃？（P0）
+3. 连接池满时拒绝还是驱逐？（P0）
+4. TLS 提前引入？（P1）
+5. 带宽限制默认开启？（P1）
+6. 监控 REST API？（P1）
+
+建议：编码前确定上述 P0 问题（1-3）。
 
 ---
 
