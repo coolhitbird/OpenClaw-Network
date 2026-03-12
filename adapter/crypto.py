@@ -80,15 +80,15 @@ class CryptoManager:
         生成临时 ECDH 密钥对
         
         Returns:
-            public_key_bytes: 压缩格式公钥（65 bytes，0x04 前缀）
+            public_key_bytes: 未压缩格式公钥（65 bytes，0x04 + X + Y）
         """
         self.key_pair = ec.generate_private_key(CURVE)
         public_key = self.key_pair.public_key()
         
-        # 序列化为压缩格式（65 bytes: 0x04 + X + Y）
+        # 序列化为 X9.62 未压缩格式（65 bytes: 0x04 + X + Y）
         public_bytes = public_key.public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.CompressedPoint
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
         )
         
         # 计算自己的指纹（用于对方验证）
