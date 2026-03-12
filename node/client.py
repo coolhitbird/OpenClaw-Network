@@ -143,7 +143,8 @@ class ClawMeshClient:
             }
         }
         data = json.dumps(msg)
-        if self.websocket and self.websocket.open:
+        # ClientConnection 没有 .open，检查是否还有 close 方法（即未关闭）
+        if self.websocket is not None and not getattr(self.websocket, 'closed', True):
             try:
                 await self.websocket.send(data)
                 logger.debug(f"Sent to {to}: {content[:50]}")
@@ -182,16 +183,28 @@ async def main():
 
     client = ClawMeshClient(node_id=node_id, server_url=args.server_url)
 
-    # 信号处理
+    # 信号处理（跨平台）
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
+
+    try:
+        # Unix: 使用 add_signal_handler
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+    except NotImplementedError:
+        # Windows: 使用同步信号处理
+        def signal_handler(sig, frame):
+            logger.info(f"Received signal {sig}, shutting down...")
+            stop_event.set()
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+    logger.info("Press Ctrl+C to stop client")
 
     # 启动连接任务
     connect_task = asyncio.create_task(client.connect())
 
-    # 同时处理停止信号
+    # 等待停止信号
     await stop_event.wait()
     connect_task.cancel()
     await client.close()

@@ -235,16 +235,31 @@ class ClawMeshServer:
         return "CL-0000000000000000000000"  # 占位符
 
     async def wait_for_shutdown(self):
-        """等待关闭信号"""
+        """等待关闭信号（跨平台实现）"""
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
 
-        # 注册信号处理
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop_event.set)
+        # Windows 不支持 add_signal_handler，使用不同策略
+        try:
+            # Unix/Linux/Mac: 使用信号处理
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop_event.set)
+            logger.info("Press Ctrl+C to stop server")
+            await stop_event.wait()
+        except NotImplementedError:
+            # Windows: 使用同步 signal.signal  + 轮询
+            import threading
 
-        logger.info("Press Ctrl+C to stop server")
-        await stop_event.wait()
+            def signal_handler(sig, frame):
+                logger.info(f"Received signal {sig}, shutting down...")
+                stop_event.set()
+
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+            logger.info("Press Ctrl+C to stop server")
+            while not stop_event.is_set():
+                await asyncio.sleep(0.1)
+
         logger.info("Shutdown signal received")
 
     async def stop(self):
