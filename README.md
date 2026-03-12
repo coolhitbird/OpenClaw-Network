@@ -143,9 +143,9 @@ projects/ClawMesh/
 - [x] AES-256-GCM 消息加密
 - [x] 公钥指纹计算与验证
 - [x] handshake 加密集成 (server/client)
+- [x] `examples/secure_multi_node_demo.py`
 - [ ] 指纹验证 UX 改进（首次确认提示）
-- [ ] `examples/multi_node_demo.py` 加密支持
-- [ ] 手动 3-node 验证
+- [ ] 手动 3-node 验证（运行 demo）
 - [ ] 更新本文档
 
 ### Phase 4: 频道与 Mesh (Week 4)
