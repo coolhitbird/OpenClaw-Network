@@ -21,6 +21,7 @@ import sys
 import argparse
 from typing import Optional
 import websockets
+import websockets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,11 +144,15 @@ class ClawMeshClient:
             }
         }
         data = json.dumps(msg)
-        # ClientConnection 没有 .open，检查是否还有 close 方法（即未关闭）
-        if self.websocket is not None and not getattr(self.websocket, 'closed', True):
+        # Check connection state: websockets uses state attribute (1=OPEN)
+        if self.websocket is not None and getattr(self.websocket, 'state', 3) == 1:
             try:
                 await self.websocket.send(data)
                 logger.debug(f"Sent to {to}: {content[:50]}")
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.error(f"Send failed: connection closed - {e}")
+                self.connected.clear()
+                raise ConnectionError("Not connected") from e
             except Exception as e:
                 logger.error(f"Send failed: {e}")
                 raise

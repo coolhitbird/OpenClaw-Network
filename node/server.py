@@ -149,14 +149,18 @@ class ClawMeshServer:
         async for raw in peer.websocket:
             try:
                 msg = json.loads(raw)
-                msg_type = msg.get("type")
+                # 提取消息类型：从 payload.type 获取
+                payload = msg.get("payload", {})
+                msg_type = payload.get("type")
                 logger.debug(f"Received from {peer.node_id}: {msg_type}")
 
                 # 消息路由
-                if msg_type == "message":
+                if msg_type == "text":
                     await self.handle_message(peer, msg)
                 elif msg_type == "node.ping":
                     await self.handle_ping(peer, msg)
+                elif msg_type is None:
+                    logger.warning(f"Message missing payload.type from {peer.node_id}")
                 else:
                     logger.warning(f"Unknown message type from {peer.node_id}: {msg_type}")
 
@@ -167,10 +171,10 @@ class ClawMeshServer:
 
     async def handle_message(self, sender: Peer, msg: dict):
         """处理消息类型"""
-        # 必填字段
-        to = msg.get("to")
+        # 必填字段：从 routing 中获取目标
+        to = msg.get("routing", {}).get("to")
         if not to:
-            logger.warning(f"Message missing 'to' field from {sender.node_id}")
+            logger.warning(f"Message missing 'routing.to' field from {sender.node_id}")
             return
 
         payload = msg.get("payload", {})
