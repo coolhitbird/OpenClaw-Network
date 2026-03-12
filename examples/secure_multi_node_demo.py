@@ -50,7 +50,7 @@ class SecureDemoNode:
         await asyncio.sleep(0.5)
         logger.info(f"[{self.node_id}] Server started")
     
-    async def start_client(self, handshake_timeout: float = 5.0):
+    async def start_client(self, handshake_timeout: float = 10.0):
         """启动加密 client，等待 handshake 完成
         
         Args:
@@ -63,11 +63,14 @@ class SecureDemoNode:
         
         # 等待 handshake 完成（检查 client.crypto）
         start = asyncio.get_event_loop().time()
+        waited = 0.0
         while not self.client.crypto:
-            if asyncio.get_event_loop().time() - start > handshake_timeout:
+            await asyncio.sleep(0.2)
+            waited += 0.2
+            if waited > handshake_timeout:
+                logger.error(f"[{self.node_id}] Handshake timeout after {waited:.1f}s")
+                logger.error(f"[{self.node_id}] Client state: connected={self.client.connected.is_set()}, crypto={self.client.crypto}")
                 raise RuntimeError(f"Client {self.node_id} handshake timeout after {handshake_timeout}s")
-            await asyncio.sleep(0.1)
-        
         logger.info(f"[{self.node_id}] Handshake completed, encryption_mode={self.client.encryption_mode}")
     
     async def send_message(self, to: str, content: str):

@@ -205,7 +205,7 @@ class CryptoManager:
         
         # 拆分 nonce (12) + ciphertext + tag (16)
         if len(encrypted_data) < 28:  # 12 nonce + 16 tag 最小
-            raise ValueError("Encrypted data too short")
+            raise ValueError(f"Encrypted data too short ({len(encrypted_data)} bytes)")
         
         nonce = encrypted_data[:12]
         ciphertext_with_tag = encrypted_data[12:]
@@ -217,7 +217,11 @@ class CryptoManager:
             logger.error(f"Decryption failed: Invalid tag (tampered or wrong key)")
             raise
         
-        return plaintext_bytes.decode('utf-8')
+        try:
+            return plaintext_bytes.decode('utf-8')
+        except UnicodeDecodeError as e:
+            logger.error(f"Decrypted bytes are not valid UTF-8: {e}")
+            raise
     
     def compute_fingerprint(self, public_key_bytes: Optional[bytes] = None) -> str:
         """

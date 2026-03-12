@@ -1,0 +1,95 @@
+warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+
+======================================================================
+ClawMesh Secure Multi-Node Demo (Phase 3)
+======================================================================
+
+2026-03-12 15:57:06,164 [__main__] [INFO] [CL-01S-SECURE-SERVER] Starting secure server on 127.0.0.1:12448
+2026-03-12 15:57:06,164 [node.server] [INFO] Starting ClawMesh server on 127.0.0.1:12448
+2026-03-12 15:57:06,169 [websockets.server] [INFO] server listening on 127.0.0.1:12448
+2026-03-12 15:57:06,169 [node.server] [INFO] Server started, waiting for connections...
+2026-03-12 15:57:06,170 [node.server] [INFO] Press Ctrl+C to stop server
+2026-03-12 15:57:06,686 [__main__] [INFO] [CL-01S-SECURE-SERVER] Server started
+2026-03-12 15:57:07,680 [__main__] [INFO] [CL-01S-SECURE-CLIENT-B] Starting secure client, connecting to ws://127.0.0.1:12448
+2026-03-12 15:57:07,685 [adapter.crypto] [INFO] Loaded 1 trusted fingerprints from config/trusted_fingerprints.json
+2026-03-12 15:57:07,685 [__main__] [INFO] [CL-01S-SECURE-CLIENT-C] Starting secure client, connecting to ws://127.0.0.1:12448
+2026-03-12 15:57:07,685 [node.client] [INFO] Connecting to ws://127.0.0.1:12448 as CL-01S-SECURE-CLIENT-B
+2026-03-12 15:57:07,724 [node.client] [INFO] Connecting to ws://127.0.0.1:12448 as CL-01S-SECURE-CLIENT-C
+2026-03-12 15:57:07,726 [websockets.server] [INFO] connection open
+2026-03-12 15:57:07,726 [node.server] [INFO] New connection from ('127.0.0.1', 55569)
+2026-03-12 15:57:07,726 [websockets.server] [INFO] connection open
+2026-03-12 15:57:07,726 [node.server] [INFO] New connection from ('127.0.0.1', 55568)
+2026-03-12 15:57:07,726 [node.client] [INFO] Connected successfully
+2026-03-12 15:57:07,733 [node.client] [INFO] Handshake sent (fingerprint: 924ea237)
+2026-03-12 15:57:07,733 [node.client] [INFO] Connected successfully
+2026-03-12 15:57:07,733 [node.client] [INFO] Handshake sent (fingerprint: 22111e06)
+2026-03-12 15:57:07,733 [node.server] [INFO] Client pubkey: len=65 bytes, first bytes: 04d5a95d
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=04d5a95d
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] derive_encryption_key: shared_secret_len=32
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Derived encryption key (32 bytes)
+2026-03-12 15:57:07,733 [node.server] [INFO] Server fingerprint: 6bb5f28a
+2026-03-12 15:57:07,733 [node.server] [INFO] Node CL-01S-SECURE-CLIENT-C connected (encryption=required, total: 1)
+2026-03-12 15:57:07,733 [node.server] [INFO] Server pubkey for ack: has_key_pair=True
+2026-03-12 15:57:07,733 [node.server] [INFO] Server pub_bytes for ack: len=65, first4=04d0a0b6
+2026-03-12 15:57:07,733 [node.server] [INFO] Client pubkey: len=65 bytes, first bytes: 0488d745
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=0488d745
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] derive_encryption_key: shared_secret_len=32
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Derived encryption key (32 bytes)
+2026-03-12 15:57:07,733 [node.server] [INFO] Server fingerprint: 6d4badfe
+2026-03-12 15:57:07,733 [node.server] [INFO] Node CL-01S-SECURE-CLIENT-B connected (encryption=required, total: 2)
+2026-03-12 15:57:07,733 [node.server] [INFO] Server pubkey for ack: has_key_pair=True
+2026-03-12 15:57:07,733 [node.server] [INFO] Server pub_bytes for ack: len=65, first4=045e4cd7
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=04d0a0b6
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=04d0a0b6
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] derive_encryption_key: shared_secret_len=32
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Derived encryption key (32 bytes)
+2026-03-12 15:57:07,733 [node.client] [INFO] Encryption handshake complete, server fingerprint: 6bb5f28a
+2026-03-12 15:57:07,733 [node.client] [WARNING] Fingerprint mismatch! stored=62452351, got=6bb5f28a
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=045e4cd7
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] compute_shared_secret: input_len=65, first4=045e4cd7
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Successfully deserialized peer public key
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] derive_encryption_key: shared_secret_len=32
+2026-03-12 15:57:07,733 [adapter.crypto] [INFO] [Crypto] Derived encryption key (32 bytes)
+2026-03-12 15:57:07,733 [node.client] [INFO] Encryption handshake complete, server fingerprint: 6d4badfe
+2026-03-12 15:57:07,733 [node.client] [WARNING] Fingerprint mismatch! stored=62452351, got=6d4badfe
+2026-03-12 15:57:07,892 [__main__] [INFO] [CL-01S-SECURE-CLIENT-C] Handshake completed, encryption_mode=required
+2026-03-12 15:57:07,892 [__main__] [INFO] [CL-01S-SECURE-CLIENT-B] Handshake completed, encryption_mode=required
+
+[Step 1] Encrypted handshake completed
+  - Server: CL-01S-SECURE-SERVER
+  - Client B: CL-01S-SECURE-CLIENT-B (encryption_mode=required)
+  - Client C: CL-01S-SECURE-CLIENT-C (encryption_mode=required)
+
+[Step 2] Client B sends encrypted message to C...
+2026-03-12 15:57:09,883 [node.server] [INFO] Message from CL-01S-SECURE-CLIENT-B to CL-01S-SECURE-CLIENT-C: Hello C! This is a secret message from B....
+2026-03-12 15:57:09,884 [node.client] [WARNING] Unknown message type: None
+  Message sent (encrypted on wire)
+
+[Step 3] Client C broadcasts encrypted message to all...
+2026-03-12 15:57:10,908 [node.server] [INFO] Message from CL-01S-SECURE-CLIENT-C to broadcast: Greetings from C! All nodes should receive this se...
+2026-03-12 15:57:10,908 [node.client] [WARNING] Unknown message type: None
+  Broadcast sent (encrypted on wire)
+
+[Step 4] Connection status
+  - Server connections: 2
+  - Client B online: True
+  - Client C online: True
+
+[Step 5] Testing reconnection (optional)...
+  (Skipping in demo to keep it short)
+
+======================================================================
+Secure Demo Completed Successfully!
+======================================================================
+
+2026-03-12 15:57:11,909 [__main__] [INFO] [CL-01S-SECURE-CLIENT-B] Stopped
+2026-03-12 15:57:11,909 [__main__] [INFO] [CL-01S-SECURE-CLIENT-C] Stopped
+2026-03-12 15:57:12,423 [__main__] [INFO] [CL-01S-SECURE-SERVER] Stopped
+2026-03-12 15:57:12,424 [node.server] [INFO] Node CL-01S-SECURE-CLIENT-B disconnected (total: 1)
+2026-03-12 15:57:12,424 [node.server] [INFO] Node CL-01S-SECURE-CLIENT-C disconnected (total: 0)
+2026-03-12 15:57:12,425 [websockets.server] [INFO] server closing
