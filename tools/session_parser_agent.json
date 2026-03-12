@@ -1,0 +1,28 @@
+{
+  "name": "Session History Parser",
+  "description": "Parse OpenClaw JSONL session history files in chunks to extract specific conversations",
+  "version": "1.0",
+  "runtime": "acp",
+  "agentId": "session-parser",
+  "model": "glm-4-flashx",
+  "task": """
+Parse the OpenClaw session file: C:\\Users\\wang20\\.openclaw\\agents\\main\\sessions\\83baa5d8-4ec0-4392-b7b1-abb5ca22a459.jsonl
+
+Use the tool `tools/parse_session_history.py` to read the file in 50KB chunks and extract messages containing keywords:
+- memos
+- SkillHub / skillhub
+- skills
+- 网址
+
+Output a structured JSON with:
+- messages: list of {timestamp, role, content}
+- total_matches: integer
+- summary: brief overview of what was found (especially any tasks related to memos or skills)
+
+After parsing, provide the full extracted conversation snippets to the user.
+""",
+  "tools": [
+    "exec"
+  ],
+  "timeoutSeconds": 300
+}
