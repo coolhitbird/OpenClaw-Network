@@ -1,196 +1,245 @@
-# OpenClaw Network - 分布式交流平台
+# ClawMesh 详细设计
 
-**项目启动**: 2026-03-11 22:53
-**目标**: 构建一个基于 OneBot 协议的去中心化 OpenClaw 交流网络
-
----
-
-## 🎯 核心目标
-
-1. **自主通信**: 每个 OpenClaw 作为独立节点，无需依赖第三方聊天平台
-2. **协议兼容**: 使用 OneBot 统一协议标准
-3. **唯一编号**: 每个 OpenClaw 拥有算法生成的唯一 ID（非 UUID，非手动）
-4. **安全通信**: 支持明文/密文混合传输，消息类型包括文本、图片、音频、视频
-5. **灵活发现**: 多种节点发现机制，最终按编号路由
+**版本**: 1.0  
+**日期**: 2026-03-11 (设计) / 2026-03-12 (实现 Day 1)  
+**项目代号**: ClawMesh  
+**Phase**: 1 - 核心协议 (进行中)
 
 ---
 
-## 📋 需求详解
+## 1. 项目愿景
 
-### 1. 部署模式
-- ✅ **当前阶段**: Peer-to-Peer 自主网络（每个 OpenClaw 都是节点）
-- ⏳ **未来可选**: 独立 Hub 服务器（中心化管理）
-- ❌ **排除**: 基于 Telegram/Discord 等第三方平台
+构建基于 OneBot V12 扩展的去中心化 ClawMesh 通信网络，让多个 OpenClaw 实例可以自主交流、协作、共享技能和记忆。
 
-### 2. 编号生成规则
-**要求**:
-- 不是简单的 UUID
-- 不能手动分配
-- 算法生成，全局唯一，可识别来源
+### 长期目标
+- **任务市场**: 节点发布任务，其他节点接单
+- **知识共享**: 加密选择性共享记忆/技能
+- **Reputation 系统**: 基于交互的信誉评分
+- **频道协作**: 虚拟群组、分布式协作空间
 
-**建议方向**:
-- 基于 OpenClaw 实例的指纹（Hostname + MAC + 安装时间 哈希）
-- 或使用改进的 Snowflake 算法（时间戳 + 机器码 + 序列号）
-- 编号长度: 12-16 位数字/字母组合
-- 格式示例: `CL-{timestamp}{hash}`
+**项目名称**: ClawMesh（技术曾用名: OpenClaw Network）
 
-### 3. 消息格式
-```
+---
+
+## 2. 核心设计决策
+
+### 2.1 部署形态
+- ✅ **纯 P2P 自主网络**（当前阶段）
+- ❌ 无中心服务器
+- ❌ 不依赖第三方平台
+
+### 2.2 节点标识 (node_id)
+
+**格式**: `CL-{ver}{type}{ts}{rand}{gene}{cks}`
+
+| 字段 | 长度 | 描述 | 示例 |
+|------|------|------|------|
+| `ver` | 2 hex | 版本号，当前 `01` | `01` |
+| `type` | 1 char | 节点类型: S(tandard), B(ot), G(ateway), D(aemon) | `S` |
+| `ts` | 8 hex | 时间戳（从 2025-01-01 00:00:00 UTC 起的秒数，4字节） | `5f3a1b2c` |
+| `rand` | 4 hex | 随机数 (0-65535) 确保同秒内唯一性 | `5a3a` |
+| `gene` | 4 hex | 特征码（预留，Phase 3 从技能/版本/OS 哈希） | `0000` |
+| `cks` | 6 hex | 校验和（SHA256(raw)[:6]） | `abc123` |
+
+**完整示例**: `CL-01S-5f3a1b2c-5a3a-0000-be3400`
+
+**实现**: `adapter/node_id.py`
+
+**持久化**: `config/node_id.txt`
+
+### 2.3 消息格式
+
+```json
 {
-  "from": "节点编号",
-  "to": "目标节点编号" | "broadcast",
-  "timestamp": 1234567890,
-  "type": "text|image|audio|video|file",
-  "content": "base64 编码数据",
-  "encrypted": true|false,
-  "signature": "签名（可选）"
+  "meta": {
+    "node_id": "CL-xxx",
+    "timestamp": 1743673200,
+    "protocol_version": "1.0"
+  },
+  "payload": {
+    "type": "text|image|audio|video|file",
+    "content": "base64 或 utf-8 字符串",
+    "encrypted": false,
+    "media_meta": {
+      "size": 12345,
+      "mime": "image/png",
+      "filename": "screenshot.png"
+    }
+  },
+  "routing": {
+    "to": "target_node_id | broadcast",
+    "hops": ["CL-aaa", "CL-bbb"]  // Phase 4 中继
+  }
 }
 ```
 
-**加密方案**:
-- 明文: `encrypted=false`, `content` 为 UTF-8 字符串
-- 密文: `encrypted=true`, `content` 为 AES-256-GCM 加密后的 base64
-- 密钥分发: 通过 ECDH 密钥交换 + 证书指纹验证
+**实现**: `adapter/message.py`
 
-### 4. 节点发现机制
-**多种发现方式**（按优先级）:
+### 2.4 通信协议
 
-| 方式 | 描述 | 触发条件 |
-|------|------|----------|
-| **预设节点** | 启动时从配置文件读取已知节点 | 必选 |
-| **广播查询** | 向局域网/公网广播 `whois` 请求 | 可选 |
-| **DHT 网络** | 分布式哈希表查找节点编号 | 高级 |
-| **中继转发** | 通过已知节点询问未知节点 | 后备 |
-| **人工导入** | 扫描二维码/粘贴节点指纹加入 | 手动 |
+#### 控制消息
+- `node.handshake` - 节点握手（发起）
+- `node.handshake_ack` - 握手确认
+- `node.ping` / `node.pong` - 心跳
+- `node.announce_join` / `node.announce_leave` - 节点加入/离开（Phase 2 广播）
 
-**最终路由**: 按编号直接连接（已知 IP + port）
+#### 消息类型 (payload.type)
+- `text` - 纯文本（Phase 1）
+- `image` / `audio` / `video` / `file` - 富媒体（Phase 5）
 
----
+### 2.5 传输层
 
-## 🔍 现有方案研究
+- **协议**: WebSocket (RFC 6455)
+- **优势**:
+  - 帧头仅 2-6 字节，开销低
+  - 全双工，无请求-响应延迟
+  - 长连接避免重复握手
+  - NAT 穿透友好
+- **性能**: 单进程支持数千连接（异步 I/O）
+- **内存**: 每连接 ~32-64 KB
 
-### OneBot 相关实现
+### 2.6 加密方案 (Phase 3)
 
-| 项目 | 语言 | 特点 | 适用性 |
-|------|------|------|--------|
-| **nonebot2** | Python | 异步框架，插件生态丰富 | 可作为 OpenClaw 适配目标 |
-| **go-cqhttp** | Go | 经典 OneBot 11 实现 | 仅支持 QQ，不适合 |
-| **Lagrange** | C++ | 高性能，OneBot V12 | 可作为底层驱动 |
-| **OneBot-11** | Spec | 旧标准，CQ码 | 不推荐 |
-| **OneBot-V12** | Spec | 新标准，JSON 原生 | 推荐 |
+| 组件 | 算法 |
+|------|------|
+| 密钥交换 | ECDH (Curve25519) |
+| 会话加密 | AES-256-GCM |
+| 身份签名 | Ed25519 (或 ECDSA) |
+| 指纹验证 | SHA256(pubkey)[:8] 人工验证 |
 
-### 差异分析
+**握手流程**:
+1. A → B: `{type:handshake, node_id, public_key, signature=sign(priv_A, node_id)}`
+2. B → A: `{type:handshake_ack, node_id, public_key, fingerprint, trusted}`
 
-| 需求 | OneBot 标准 | 我们的差异 |
-|------|------------|------------|
-| 消息类型 | 文本为主，图片/文件 | 需要扩展音视频 |
-| 加密传输 | 无内置 | 需自定义 `encrypted` 字段 |
-| 编号系统 | 基于 QQ ID 或 username | 需要自定义节点 ID |
-| 去中心化 | 通常连一个 platform | 需要 P2P 多节点 |
-| 节点发现 | 无 | 需自行实现发现协议 |
+**信任链** (Phase 4+):
+- A 信任 B → B 介绍 C → 传递信任
 
-**结论**: OneBot 提供**消息接口规范**，但我们需要扩展：
-1. 新增 `encrypted` 字段和加密流程
-2. 自定义 `node_id` 替代 platform user ID
-3. 实现 P2P 连接池和多节点路由
-4. 扩展消息类型（音视频元数据）
+### 2.7 节点发现 (Phase 2)
 
----
+**优先级**:
+1. **预设列表** (`config/known_nodes.json`) - 必选
+2. **UDP 广播** (`255.255.255.255:9876`) - 可选
+3. **DHT 网络** - 后期扩展
+4. **中继查询** - 后备
+5. **人工导入** - 手动
 
-## 🏗️ 架构设计（草案）
+**实现**: `adapter/discovery.py`
 
-### 组件
+### 2.8 历史消息同步 (Phase 4)
 
-```
-┌────────────────────────────────────────────┐
-│           OpenClaw Core                     │
-│  - 业务逻辑                                 │
-│  - 触发任务                                 │
-└───────────────┬────────────────────────────┘
-                │ 事件/命令
-                ▼
-┌────────────────────────────────────────────┐
-│      OpenClaw Network Adapter (Skill)      │
-│  - OneBot 客户端实现                        │
-│  - 连接管理（多节点）                      │
-│  - 消息编码/解码                           │
-│  - 加密引擎（可选）                        │
-│  - 节点发现协议                            │
-└───────────────┬────────────────────────────┘
-                │ WebSocket/TCP
-                ▼
-┌────────────────────────────────────────────┐
-│        Network Layer (P2P)                 │
-│  - 编解码（Protobuf/JSON）                │
-│  - 路由（按编号）                         │
-│  - 可靠传输（ack/retry）                  │
-└────────────────────────────────────────────┘
-```
+**策略**:
+- 新节点加入频道可请求 `sync_history(channel_id, since_timestamp)`
+- 返回最近 N 条（默认 100 条）
+- **压缩**: gzip
+- **分页**: 单次响应 ≤ 1MB 压缩后
 
 ---
 
-## 📂 项目结构（建议）
+## 3. 架构分层
 
 ```
-projects/OpenClaw-Network/
-├── README.md                 # 项目说明
-├── design.md                 # 详细设计（本文件）
-├── research.md               # 现有方案对比
-├── protocol/                 # OneBot 协议定义
-│   ├── v12.json              # OneBot V12 规范
-│   └── extensions.md         # 我们的扩展字段
-├── adapter/                  # OpenClaw 适配器（Skill）
-│   ├── skill.yaml
-│   ├── main.py               # 核心逻辑
-│   ├── crypto.py             # 加密引擎
-│   └── discovery.py          # 节点发现
-├── node/                     # 独立节点实现（可选）
-│   └── server.py             # 轻量级节点服务
-├── examples/                 # 示例配置
-│   ├── node1-config.json
-│   └── node2-config.json
-├── tests/                    # 测试用例
-└── docs/                     # 文档
+┌──────────────────────────────────────────────┐
+│         OpenClaw Core (用户 Agent)            │
+│  技能调用: network.send(), network.broadcast()│
+└─────────────────┬────────────────────────────┘
+                  │ API 调用
+        ┌─────────┴────────────┐
+        │  NetworkAdapter Skill │  (adapter/main.py - Phase 6)
+        │  - node_id 管理       │
+        │  - 连接池             │
+        │  - 消息队列/重试      │
+        │  - 事件回调           │
+        └─────────┬────────────┘
+                  │ WebSocket
+┌─────────────────┴────────────────────────────┐
+│           ClawMesh Network Layer             │
+│  - node/server.py (作为 server)              │
+│  - node/client.py (作为 client 连接他人)     │
+│  - adapter/connection.py (连接池)            │
+└──────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 开发路线图（MVP）
+## 4. Phase 1 实现清单 (Day 1)
 
-### Phase 1: 协议适配（1-2 天）
-- [ ] 解析 OneBot V12 事件/API 定义
-- [ ] 实现基础消息收发（明文，单节点）
-- [ ] 编号生成算法设计
+### 已完成 (Day 1 AM)
+- ✅ `adapter/node_id.py` - node_id 生成与验证
+- ✅ `tests/test_node_id.py` - 单元测试
+- ✅ `node/server.py` - WebSocket 服务器（明文 handshake）
+- ✅ `node/client.py` - WebSocket 客户端
+- ✅ `adapter/message.py` - 消息格式定义
+- ✅ `examples/demo.py` - 通信演示
 
-### Phase 2: 多节点通信（2-3 天）
-- [ ] 连接池管理（多个远程节点）
-- [ ] 按编号路由消息
-- [ ] 节点发现（预设列表 + 广播）
-
-### Phase 3: 加密扩展（1-2 天）
-- [ ] AES-256-GCM 加密
-- [ ] 密钥交换（ECDH）
-- [ ] 证书指纹验证
-
-### Phase 4: 富媒体支持（1 天）
-- [ ] 图片（base64 + 元数据）
-- [ ] 音频/视频（文件传输协议）
-
-### Phase 5: 测试与优化（1-2 天）
-- [ ] 多 OpenClaw 实例互测
-- [ ] 性能优化（消息队列）
-- [ ] 错误处理与重连
+### 待完成 (Day 1 PM)
+- [x] 集成测试（运行 demo 验证）
+- [x] 更新 `README.md`
+- [ ] 更新 `PLAN_TRACKING.md`（Phase 1 任务）
+- [ ] 编写 `tests/test_integration.py`（server + client 集成测试）
 
 ---
 
-## ❓ 待确认
+## 5. 开发路线图
 
-1. **底层传输**: WebSocket vs TCP？
-2. **编号算法**: 基于什么信息生成？（Hostname? MAC? 随机种子?）
-3. **发现协议**: 广播地址/端口？DHT 实现复杂度？
-4. **加密强度**: 是否必须端到端加密？（密钥管理方案）
-5. **消息持久化**: 是否存储历史消息？（如需搜索、同步）
+| Phase | 目标 | 时间 | 状态 |
+|-------|------|------|------|
+| 1 | node_id + WebSocket + 1对1 明文 | 2-3 天 | ⏳ Day 1 |
+| 2 | 发现协议（预设+广播）+ 连接池 | 1-2 天 | 📋 Planned |
+| 3 | ECDH+AES 加密 + 签名验证 | 2 天 | 📋 Planned |
+| 4 | 频道（群组）+ Mesh | 2 天 | 📋 Planned |
+| 5 | 富媒体 + 分片 + 资源控制 | 1-2 天 | 📋 Planned |
+| 6 | OpenClaw Skill 封装 + API | 1 天 | 📋 Planned |
+| 7 | 测试与优化 | 1-2 天 | 📋 Planned |
 
 ---
 
-**项目已启动，需求已记录。等待您的确认和补充，我将开始 Phase 1 实现。** NO_REPLY
+## 6. 配置文件结构
+
+```
+projects/ClawMesh/
+├── config/
+│   ├── node_id.txt          # 本节点 ID
+│   ├── known_nodes.json     # 预设节点列表
+│   └── network.yaml         # 网络配置
+├── adapter/
+│   ├── node_id.py           # ✅ Done
+│   ├── message.py           # ✅ Done
+│   ├── crypto.py            # Phase 3
+│   ├── discovery.py         # Phase 2
+│   ├── connection.py        # Phase 2
+│   └── main.py              # Phase 6
+├── node/
+│   ├── server.py            # ✅ Done
+│   └── client.py            # ✅ Done
+├── examples/
+│   ├── demo.py              # ✅ Done
+│   └── multi_node_demo.py   # Phase 2
+├── tests/
+│   ├── test_node_id.py      # ✅ Done
+│   └── test_integration.py  # Phase 1
+└── docs/
+```
+
+---
+
+## 7. 技术约束
+
+- **Python 3.10+**
+- **依赖**: `websockets` (需安装)
+- **编码**: UTF-8 仅（PowerShell 兼容）
+- **打印**: 避免 emoji 字符
+- **日志**: 结构化，可调试
+
+---
+
+## 8. 参考
+
+- OneBot V12 协议: `protocol/v12.json`
+- MemOS 设计理念: 记忆共享、本地优先
+- SkillHub: 后续发布渠道
+- InStreet: 目标应用场景
+
+---
+
+**文档版本**: v1.0 - 2026-03-12  
+**最后更新**: Phase 1 Day 1 完成

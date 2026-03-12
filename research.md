@@ -1,7 +1,7 @@
 # OneBot 实现对比与 ours 差异
 
 **日期**: 2026-03-11
-**目的**: 分析现有 OneBot 实现，明确 OpenClaw Network 的设计定位
+**目的**: 分析现有 OneBot 实现，明确 ClawMesh 的设计定位
 
 ---
 
@@ -36,7 +36,7 @@
 
 ## 🆚 与我们的差异
 
-| 需求 | OneBot 标准 | 现有实现 | OpenClaw Network |
+| 需求 | OneBot 标准 | 现有实现 | ClawMesh |
 |------|------------|----------|------------------|
 | **去中心化 P2P** | ❌ 单一连接 platform | 单 server 连接 | ✅ 多节点双向连接 |
 | **自定义编号** | ❌ 依赖 platform user ID | platform 分配 ID | ✅ 算法生成 node_id |
@@ -77,8 +77,8 @@
 ### 方案 A: Skill（推荐）
 
 ```yaml
-name: openclaw-network
-description: 连接 OpenClaw Network
+name: clawmesh
+description: 连接 ClawMesh P2P 网络
 version: 0.1.0
 tools:
   - network_adapter
