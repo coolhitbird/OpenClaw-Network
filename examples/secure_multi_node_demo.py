@@ -50,14 +50,25 @@ class SecureDemoNode:
         await asyncio.sleep(0.5)
         logger.info(f"[{self.node_id}] Server started")
     
-    async def start_client(self):
-        """启动加密 client，自动 handshake"""
+    async def start_client(self, handshake_timeout: float = 5.0):
+        """启动加密 client，等待 handshake 完成
+        
+        Args:
+            handshake_timeout: 等待 handshake 完成的超时（秒）
+        """
         logger.info(f"[{self.node_id}] Starting secure client, connecting to {self.server_url}")
         self.client = ClawMeshClient(self.node_id, self.server_url)
         client_task = asyncio.create_task(self.client.connect())
         self._tasks.append(client_task)
-        await asyncio.sleep(1)  # 等待连接建立
-        logger.info(f"[{self.node_id}] Client connected and handshake completed")
+        
+        # 等待 handshake 完成（检查 client.crypto）
+        start = asyncio.get_event_loop().time()
+        while not self.client.crypto:
+            if asyncio.get_event_loop().time() - start > handshake_timeout:
+                raise RuntimeError(f"Client {self.node_id} handshake timeout after {handshake_timeout}s")
+            await asyncio.sleep(0.1)
+        
+        logger.info(f"[{self.node_id}] Handshake completed, encryption_mode={self.client.encryption_mode}")
     
     async def send_message(self, to: str, content: str):
         """发送加密消息"""
