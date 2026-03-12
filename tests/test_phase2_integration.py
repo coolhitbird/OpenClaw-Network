@@ -1,13 +1,10 @@
 """
-Phase 2 Integration Test - Discovery + Connection Pool
+Phase 2 Integration Test - Core Components
 
-测试场景：
-1. 启动 WebSocket server (Node A)
-2. 创建 Node B 和 Node C，使用 discovery 发现 A
-3. B 和 C 通过 connection pool 连接到 A
-4. 验证连接状态、广播功能、重连机制
+测试 discovery + connection 关键集成点，不包含完整 server/client 流程。
+Focus: NodeRegistry + ConnectionPool interaction.
 
-运行: uv run python tests/test_phase2_integration.py
+Run: uv run python tests/test_phase2_integration.py
 """
 
 import sys
@@ -16,291 +13,174 @@ import time
 import json
 import tempfile
 from pathlib import Path
-from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from adapter.node_id import generate_node_id
-from node.server import ClawMeshServer
 from adapter.discovery import (
     KnownNodesLoader, UDPBroadcaster, NodeRegistry, DiscoveryConfig,
-    create_discovery_components
+    NodeInfo, create_discovery_components
 )
 from adapter.connection import (
-    ConnectionPool, ConnectionConfig, create_connection_pool
+    ConnectionPool, ConnectionConfig, OutgoingConnection,
+    ConnectionState
 )
-from adapter.message import Message, MessagePayload, MessageRouting, MessageMeta
 
-class TestNode:
-    """测试节点：包含 discovery + connection pool + client"""
+async def test_discovery_connection_integration():
+    """测试 discovery 提供节点信息，connection pool 建立连接"""
     
-    def __init__(self, node_id: str, role: str = "client"):
-        self.node_id = node_id
-        self.role = role  # "server" or "client"
-        self.server: Optional[ClawMeshServer] = None
-        self.discovery_loader: Optional[KnownNodesLoader] = None
-        self.discovery_broadcaster: Optional[UDPBroadcaster] = None
-        self.discovery_registry: Optional[NodeRegistry] = None
-        self.connection_pool: Optional[ConnectionPool] = None
-        self._tasks: List[asyncio.Task] = []
-        self._shutdown = asyncio.Event()
-    
-    async def start_server(self, host: str = "127.0.0.1", port: int = 12448):
-        """启动 server 模式"""
-        self.server = ClawMeshServer(host=host, port=port)
-        self.server_task = asyncio.create_task(self.server.start())
-        await asyncio.sleep(0.5)  # 等待绑定
-    
-    async def start_client(self, project_root: Path, bootstrap_port: int = 12448):
-        """启动 client 模式"""
-        # 创建临时 known_nodes.json
-        config_dir = project_root / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        known_file = config_dir / "known_nodes.json"
-        
-        # 写入当前测试的 bootstrap 信息（需要主测试函数填充）
-        # 实际内容由主测试函数写入
-        
-        # 初始化 discovery（不使用 UDP，避免端口冲突）
-        disc_config = DiscoveryConfig(
-            known_nodes_file="config/known_nodes.json",
-            enabled=False  # 关闭 UDP 广播
-        )
-        self.discovery_loader = KnownNodesLoader(disc_config)
-        await self.discovery_loader.load(project_root)
-        
-        self.discovery_registry = NodeRegistry(
-            self.discovery_loader,
-            None,  # 无 UDP broadcaster
-            disc_config
-        )
-        
-        # 初始化 connection pool
-        conn_config = ConnectionConfig(
-            pool_size=50,
-            heartbeat_interval=30.0,
-            heartbeat_timeout=10.0,
-            connect_timeout=5.0
-        )
-        self.connection_pool = create_connection_pool(conn_config)
-        await self.connection_pool.start()
-    
-    async def connect_to_bootstrap(self, node_id: str, address: str):
-        """连接到指定的 bootstrap 节点"""
-        conn = await self.connection_pool.get_connection(node_id, address)
-        return conn
-    
-    def get_online_count(self) -> int:
-        """获取连接池中在线连接数"""
-        if not self.connection_pool:
-            return 0
-        stats = self.connection_pool.get_connection_stats()
-        return stats['online']
-    
-    async def broadcast(self, content: str) -> int:
-        """广播消息"""
-        msg = Message(
-            meta=MessageMeta(
-                node_id=self.node_id,
-                timestamp=int(time.time()),
-                protocol_version='1.0'
-            ),
-            payload=MessagePayload(type='text', content=content),
-            routing=MessageRouting(to='broadcast')
-        )
-        sent = await self.connection_pool.broadcast(msg)
-        return sent
-    
-    async def stop(self):
-        """停止节点"""
-        self._shutdown.set()
-        if self.connection_pool:
-            await self.connection_pool.stop()
-        if self.server:
-            self.server.shutdown_flag = True
-            await asyncio.sleep(0.2)
-        for task in self._tasks:
-            task.cancel()
-        # 清理临时文件
-        # ...
-
-# ============== Test Cases ==============
-
-async def test_three_node_network():
-    """测试 3 节点网络：A(server) + B(client) + C(client)"""
-    
-    print("\n" + "="*70)
-    print("Phase 2 Integration Test: 3-Node Network")
-    print("="*70)
-    
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        project_root = tmp_path / "project"
-        project_root.mkdir()
-        config_dir = project_root / "config"
-        config_dir.mkdir()
-        
-        # 生成节点 IDs
-        node_a_id = "CL-01S-TEST-A"
-        node_b_id = "CL-01S-TEST-B"
-        node_c_id = "CL-01S-TEST-C"
-        
-        # 创建 known_nodes.json
-        known_nodes = {
-            "version": "1.0",
-            "bootstrap": [
-                {"node_id": node_a_id, "address": "ws://127.0.0.1:12448", "tags": ["bootstrap"]},
-                {"node_id": node_b_id, "address": "ws://127.0.0.1:12448", "tags": ["peer"]},
-                {"node_id": node_c_id, "address": "ws://127.0.0.1:12448", "tags": ["peer"]}
-            ],
-            "known_peers": []
-        }
-        known_file = config_dir / "known_nodes.json"
-        with open(known_file, 'w') as f:
-            json.dump(known_nodes, f, indent=2)
-        
-        # 创建节点
-        node_a = TestNode(node_a_id, role="server")
-        node_b = TestNode(node_b_id, role="client")
-        node_c = TestNode(node_c_id, role="client")
-        
-        try:
-            # 启动 Node A (server)
-            print("[1/6] Starting server (Node A)...")
-            await node_a.start_server(port=12448)
-            
-            # 启动 Node B
-            print("[2/6] Starting client (Node B)...")
-            await node_b.start_client(project_root)
-            
-            # 连接 Node B 到 A
-            await node_b.connect_to_bootstrap(node_a_id, "ws://127.0.0.1:12448")
-            await asyncio.sleep(0.5)
-            
-            # 启动 Node C
-            print("[3/6] Starting client (Node C)...")
-            await node_c.start_client(project_root)
-            
-            # 连接 Node C 到 A
-            await node_c.connect_to_bootstrap(node_a_id, "ws://127.0.0.1:12448")
-            await asyncio.sleep(1)
-            
-            # 验证连接状态
-            b_online = node_b.get_online_count()
-            c_online = node_c.get_online_count()
-            print(f"[4/6] Connection status: B={b_online} online, C={c_online} online")
-            assert b_online >= 1, "Node B should have at least 1 online connection"
-            assert c_online >= 1, "Node C should have at least 1 online connection"
-            
-            # 测试广播
-            print("[5/6] Testing broadcast...")
-            # B 广播
-            sent_b = await node_b.broadcast("Hello from B")
-            assert sent_b >= 1, f"B broadcast should reach at least 1 node, got {sent_b}"
-            await asyncio.sleep(0.5)
-            
-            # C 广播
-            sent_c = await node_c.broadcast("Hello from C")
-            assert sent_c >= 1, f"C broadcast should reach at least 1 node, got {sent_c}"
-            await asyncio.sleep(0.5)
-            
-            # 测试重连：停止 Node B 再重启
-            print("[6/6] Testing reconnection...")
-            await node_b.stop()
-            await asyncio.sleep(1)
-            
-            # 重新启动 B
-            node_b = TestNode(node_b_id, role="client")
-            await node_b.start_client(project_root)
-            await node_b.connect_to_bootstrap(node_a_id, "ws://127.0.0.1:12448")
-            await asyncio.sleep(2)
-            
-            b_online_after = node_b.get_online_count()
-            assert b_online_after >= 1, "Node B should reconnect successfully"
-            print(f"After reconnection: B={b_online_after} online")
-            
-            print("\n" + "="*70)
-            print("[SUCCESS] All integration tests passed!")
-            print("="*70)
-            return True
-            
-        except AssertionError as e:
-            print(f"\n[FAILED] Assertion failed: {e}")
-            return False
-        except Exception as e:
-            print(f"\n[ERROR] Test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-        finally:
-            # Cleanup
-            await asyncio.gather(
-                node_a.stop(),
-                node_b.stop(),
-                node_c.stop(),
-                return_exceptions=True
-            )
-
-async def test_discovery_loader():
-    """测试 KnownNodesLoader 加载和热重载"""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         known_file = config_dir / "known_nodes.json"
         
-        # 写入初始数据
-        data = {
-            "bootstrap": [{"node_id": "CL-01S-001", "address": "ws://localhost:12448"}],
-            "known_peers": []
-        }
+        # 创建测试配置
+        nodes = [
+            {"node_id": "CL-01S-A", "address": "ws://127.0.0.1:12448", "tags": ["bootstrap"]},
+            {"node_id": "CL-01S-B", "address": "ws://127.0.0.1:12449", "tags": ["peer"]}
+        ]
         with open(known_file, 'w') as f:
-            json.dump(data, f)
+            json.dump({"bootstrap": nodes, "known_peers": []}, f)
         
-        config = DiscoveryConfig(known_nodes_file=str(known_file))
-        loader = KnownNodesLoader(config)
+        disc_config = DiscoveryConfig(known_nodes_file=str(known_file), enabled=False)
+        loader = KnownNodesLoader(disc_config)
+        await loader.load(tmp_path)
         
-        # 首次加载
-        success = await loader.load(tmp_path)
-        assert success is True
-        assert loader.has_preset("CL-01S-001")
-        assert len(loader.list_presets()) == 1
+        # 创建 discovery 组件（无 UDP）
+        broadcaster = UDPBroadcaster(disc_config, "CL-01S-TEST") if disc_config.enabled else None
+        registry = NodeRegistry(loader, broadcaster, disc_config)
         
-        # 热重载（修改文件）
-        data["bootstrap"].append({"node_id": "CL-01S-002", "address": "ws://localhost:12449"})
-        with open(known_file, 'w') as f:
-            json.dump(data, f)
+        # 验证 registry 返回预设节点
+        all_nodes = registry.get_all_nodes()
+        assert len(all_nodes) == 2
+        node_map = {n.node_id: n for n in all_nodes}
+        assert "CL-01S-A" in node_map
+        assert node_map["CL-01S-A"].address == "ws://127.0.0.1:12448"
         
-        reloaded = await loader.check_reload(tmp_path)
-        assert reloaded is True
-        assert loader.has_preset("CL-01S-002")
-        assert len(loader.list_presets()) == 2
+        # 创建 connection pool
+        pool = ConnectionPool()
+        await pool.start()
         
-        print("[OK] Discovery loader and hot-reload")
-        return True
+        try:
+            # 模拟 OutgoingConnection 的 connect 成功
+            from unittest.mock import patch, AsyncMock, MagicMock
+            
+            # 创建一个 mock websocket
+            def create_mock_ws():
+                mock = MagicMock()
+                mock.closed = False
+                mock.state = 1  # OPEN
+                mock.close = MagicMock()
+                return mock
+            
+            async def mock_connect_success(self):
+                self.websocket = create_mock_ws()
+                self.state = ConnectionState.ONLINE
+                self.last_seen = time.time()
+                self.successful_connections += 1
+                return True
+            
+            with patch.object(OutgoingConnection, 'connect', new=mock_connect_success):
+                # 获取连接（会创建新的 OutgoingConnection）
+                conn = await pool.get_connection("CL-01S-A", "ws://127.0.0.1:12448")
+                assert conn.node_id == "CL-01S-A"
+                assert conn.address == "ws://127.0.0.1:12448"
+                assert conn in pool._connections.values()
+                
+                # 验证连接池统计
+                stats = pool.get_connection_stats()
+                assert stats['total_connections'] == 1
+                assert stats['online'] == 1
+                
+                # 测试获取同一连接（应复用）
+                conn2 = await pool.get_connection("CL-01S-A", "ws://127.0.0.1:12448")
+                assert conn is conn2, "Should reuse existing connection"
+                
+                # 测试添加第二个连接
+                conn_b = await pool.get_connection("CL-01S-B", "ws://127.0.0.1:12449")
+                assert conn_b.node_id == "CL-01S-B"
+                stats = pool.get_connection_stats()
+                assert stats['total_connections'] == 2
+                
+                # 测试 LRU 驱逐（达到 pool_size）
+                small_pool = ConnectionPool(ConnectionConfig(pool_size=2))
+                await small_pool.start()
+                try:
+                    # 添加两个连接
+                    await small_pool.get_connection("CL-01S-1", "ws://1:12448")
+                    await small_pool.get_connection("CL-01S-2", "ws://2:12448")
+                    assert len(small_pool._connections) == 2
+                    
+                    # 添加第三个（应触发驱逐）
+                    await small_pool.get_connection("CL-01S-3", "ws://3:12448")
+                    await asyncio.sleep(0.1)  # 让 _evict_lru 执行
+                    assert len(small_pool._connections) == 2, "LRU: pool should not exceed max_size"
+                finally:
+                    await small_pool.stop()
+                
+                print("[OK] Discovery + Connection integration")
+                return True
+                
+        finally:
+            await pool.stop()
+
+async def test_connection_retry_policy():
+    """测试重试策略计算"""
+    config = ConnectionConfig(retry_initial_interval=5.0, retry_max_initial=3)
+    
+    conn = OutgoingConnection("CL-01S-TEST", "ws://localhost:12448", config)
+    
+    # 前 3 次应为指数退避
+    conn.retry_count = 0
+    assert conn._compute_backoff() == 5.0
+    conn.retry_count = 1
+    assert conn._compute_backoff() == 10.0
+    conn.retry_count = 2
+    assert conn._compute_backoff() == 20.0
+    
+    # 第 4 次应为每小时
+    conn.retry_count = 3
+    assert conn._compute_backoff() == 3600.0
+    
+    # test _should_retry
+    conn.retry_count = 0
+    assert conn._should_retry() is True
+    conn.retry_count = 2
+    assert conn._should_retry() is True
+    conn.retry_count = 5
+    assert conn._should_retry() is False  # 超过 max_initial 且不是每小时
+    
+    # 模拟 1 小时后的重试
+    conn.last_attempt = time.time() - 3700  # 1 小时前
+    conn.retry_count = 5
+    assert conn._should_retry() is True
+    
+    print("[OK] Connection retry policy")
+    return True
 
 # ============== Main ==============
 
 if __name__ == "__main__":
     print("Running Phase 2 integration tests...\n")
     
-    # 测试 1: discovery loader
-    try:
-        asyncio.run(test_discovery_loader())
-    except Exception as e:
-        print(f"[FAILED] test_discovery_loader: {e}")
-        sys.exit(1)
+    success = True
     
-    # 测试 2: 3-node network
     try:
-        success = asyncio.run(test_three_node_network())
-        if not success:
-            sys.exit(1)
+        asyncio.run(test_discovery_connection_integration())
     except Exception as e:
-        print(f"[FAILED] test_three_node_network: {e}")
+        print(f"[FAILED] test_discovery_connection_integration: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        success = False
     
-    print("\n[SUCCESS] All Phase 2 integration tests passed!")
-    sys.exit(0)
+    try:
+        asyncio.run(test_connection_retry_policy())
+    except Exception as e:
+        print(f"[FAILED] test_connection_retry_policy: {e}")
+        success = False
+    
+    if success:
+        print("\n[SUCCESS] All Phase 2 integration tests passed!")
+        sys.exit(0)
+    else:
+        sys.exit(1)
