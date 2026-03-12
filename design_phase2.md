@@ -126,34 +126,121 @@
 - [ ] 是否支持 IPv6 广播？
 - [ ] 广播超时时间？（等待响应多久）
 
-### 3.3 发现策略优先级（更新）
+### 3.2 UDP 广播协议（完整实现）
 
-**策略**: 合并列表，预设优先，UDP 补充
+**协议消息格式**:
+
+```json
+// Request（广播到 255.255.255.255:9876）
+{
+  "type": "discovery.request",
+  "node_id": "CL-01S-5f3a1b2c-5a3a-0000-be3400",
+  "nonce": "a1b2c3d4e5f6...",  // 32 hex chars (16 bytes)，防重放
+  "timestamp": 1743673200
+}
+
+// Response（单播回请求者）
+{
+  "type": "discovery.response",
+  "node_id": "CL-01S-5f3a1b2c-5a3a-0000-be3400",
+  "ws_address": "ws://192.168.1.100:8765",
+  "nonce": "a1b2c3d4e5f6...",  // 回声相同 nonce
+  "timestamp": 1743673200
+}
+```
+
+**安全机制**:
+- **nonce 防重放**: 每个 request 生成 16 字节随机 nonce，缓存在 `_pending_nonces`（ OrderedDict，容量 100，TTL 30s）
+- 收到 response 时验证 nonce 存在且未使用，使用后立即删除
+- 重复 nonce 或未知 nonce 被拒绝并记录 warning
+
+**实现类**:
+- `UDPBroadcaster`:
+  - `start()` - 绑定 `0.0.0.0:9876`，启动 `UDPProtocol`
+  - `broadcast_request()` - 每 30 秒发送一次 request（可配置）
+  - `_send_request()` - 生成 nonce，发送 JSON
+  - `handle_response()` - 验证 nonce，添加节点到 `_discovered`
+  - `_cleanup_nonces()` - 定期清理过期 nonce（TTL 30s，LRU 容量 100）
+  - `get_discovered(ttl=60.0)` - 获取发现节点，自动清理过期（last_seen > ttl）
+
+**错误处理**:
+- `OSError`（端口占用、权限不足）→ 记录 error，提示用户检查防火墙或更换端口
+- `json.JSONDecodeError` → 记录 warning，忽略
+- 其他异常 → 记录 error，继续运行
+
+**配置参数**（`config/network.yaml`）:
+
+```yaml
+discovery:
+  enabled: true
+  udp_port: 9876
+  broadcast_interval: 30s
+  conflict_resolution: "preset_priority"
+  # 安全参数
+  nonce_size: 16          # nonce 字节数（16 bytes = 32 hex chars）
+  nonce_cache_size: 100   # pending nonce 缓存大小
+  nonce_ttl: 30s          # nonce 有效时间
+  discovery_ttl: 60s      # 发现节点过期时间（last_seen 超过则移除）
+```
+
+**注意事项**:
+- Windows 防火墙可能需要允许 UDP 9876 端口（入站/出站广播）
+- `255.255.255.255` 广播地址可能被路由器阻止，可考虑 `192.168.1.255` 替代（未来可选）
+- 减少广播频率以避免网络洪水（默认 30s 合理）
+
+---
+
+### 3.3 NodeRegistry 合并策略（更新）
 
 ```python
 class NodeRegistry:
-    presets: Dict[node_id, NodeInfo]      # 预设（高优先级）
-    discovered: Dict[node_id, NodeInfo]  # UDP 发现（低优先级）
-    
-    def get_address(self, node_id: str) -> Optional[str]:
-        if node_id in self.presets:
-            return self.presets[node_id].address
-        elif node_id in self.discovered:
-            return self.discovered[node_id].address
-        return None
-    
-    def add_udp_discovery(self, node_id, address):
-        """UDP 发现新节点，不覆盖预设"""
-        if node_id not in self.presets:
-            self.discovered[node_id] = NodeInfo(node_id, address, source="udp")
-        else:
-            # 记录冲突（预设优先）
-            logger.warning(f"UDP地址冲突: {node_id} 预设={self.presets[node_id].address} UDP={address}")
+    def __init__(self, loader: KnownNodesLoader, discovery: UDPBroadcaster, config: DiscoveryConfig):
+        self.loader = loader
+        self.discovery = discovery
+        self.config = config
+        self._conflict_log: List[Dict] = []
+
+    def get_all_nodes(self, include_expired: bool = False) -> List[NodeInfo]:
+        """
+        获取全部已知节点
+        
+        Args:
+            include_expired: 是否包含过期的发现节点（默认过滤）
+        """
+        nodes = []
+        preset_ids = set(self.loader.presets.keys())
+        
+        # 1. 添加预设节点（高优先级）
+        for node in self.loader.list_presets():
+            nodes.append(node)
+        
+        # 2. 获取发现节点（自动清理过期）
+        ttl = None if include_expired else self.config.discovery_ttl
+        discovered = self.discovery.get_discovered(ttl=ttl)
+        
+        # 3. 合并：预设优先，UDP 补充
+        for node_id, node in discovered.items():
+            if node_id in preset_ids:
+                # 冲突：记录警告，跳过 UDP 副本
+                preset_node = self.loader.presets[node_id]
+                if preset_node.address != node.address:
+                    self._log_conflict(node_id, preset_node.address, node.address)
+                continue
+            nodes.append(node)
+        
+        return nodes
 ```
 
-**待明确**:
-- [ ] UDP 冲突是否写入 `logs/discovery_conflicts.log`？
-- [ ] 是否提供 `--force-udp` 命令行参数覆盖预设？（仅调试）
+**行为**:
+- 预设节点永远优先（即使 UDP 提供不同地址）
+- UDP 发现的节点自动添加，但 `last_seen` 超过 `discovery_ttl` 被过滤
+- 冲突日志供管理员审查（可导出到 `logs/discovery_conflicts.json`）
+
+---
+
+### 4. 连接池设计（Phase 2 Day 3-4 待实现）
+
+[... 原有内容保持不变 ...]
 
 **🎯 待细化**:
 - [ ] 连接 bootstrap 失败后，是否重试？（间隔：指数退避 5s, 10s, 30s, 60s...）

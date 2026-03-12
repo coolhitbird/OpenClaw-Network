@@ -131,13 +131,14 @@ def test_node_registry_preset_priority():
             return node_id in self.presets
     
     class MockDiscovery:
-        def get_discovered(self):
+        def get_discovered(self, ttl=None):
             return {
                 "CL-01S-A": NodeInfo("CL-01S-A", "ws://udp:9876", source="udp", last_seen=time.time()),
                 "CL-01S-B": NodeInfo("CL-01S-B", "ws://udp:9876", source="udp", last_seen=time.time())
             }
     
-    registry = NodeRegistry(MockLoader(), MockDiscovery())
+    config = DiscoveryConfig()
+    registry = NodeRegistry(MockLoader(), MockDiscovery(), config)
     all_nodes = registry.get_all_nodes()
     
     # 检查结果
@@ -172,12 +173,13 @@ def test_node_registry_no_duplicates():
             return node_id in self.presets
     
     class MockDiscovery:
-        def get_discovered(self):
+        def get_discovered(self, ttl=None):
             return {
                 "CL-01S-A": NodeInfo("CL-01S-A", "ws://udp:9876", source="udp", last_seen=time.time())
             }
     
-    registry = NodeRegistry(MockLoader(), MockDiscovery())
+    config = DiscoveryConfig()
+    registry = NodeRegistry(MockLoader(), MockDiscovery(), config)
     all_nodes = registry.get_all_nodes()
     assert len(all_nodes) == 1  # 只有预设，UDP 的副本被忽略
     print("[OK] No duplicate nodes when preset exists")

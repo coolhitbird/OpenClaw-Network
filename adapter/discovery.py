@@ -13,9 +13,11 @@ import json
 import time
 import asyncio
 import logging
+import secrets  # 新增：用于生成 nonce
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, asdict
+from collections import OrderedDict
 import socket
 import struct
 
@@ -54,6 +56,11 @@ class DiscoveryConfig:
     broadcast_interval: float = 30.0  # seconds
     conflict_resolution: str = "preset_priority"  # preset_priority|udp_priority|merge_latest
     known_nodes_file: str = "config/known_nodes.json"
+    # 新增：安全与性能
+    nonce_size: int = 16  # nonce 字节数（用于防重放）
+    nonce_cache_size: int = 100  # pending nonce 缓存大小
+    nonce_ttl: float = 30.0  # nonce 有效时间（秒）
+    discovery_ttl: float = 60.0  # 发现节点过期时间（秒）
 
 # ============== Known Nodes Loader ==============
 
@@ -176,8 +183,19 @@ class UDPBroadcaster:
     UDP 广播发现协议
 
     协议：
-      Request: {"type": "discovery.request", "node_id": "...", "timestamp": ...}
-      Response: {"type": "discovery.response", "node_id": "...", "ws_address": "...", "timestamp": ...}
+      Request: {
+        "type": "discovery.request",
+        "node_id": "...",
+        "nonce": "random_hex_32",  # 防重放随机数
+        "timestamp": 1234567890
+      }
+      Response: {
+        "type": "discovery.response",
+        "node_id": "...",
+        "ws_address": "...",
+        "nonce": "echo_back",  # 回声相同 nonce
+        "timestamp": 1234567890
+      }
     """
 
     def __init__(self, config: DiscoveryConfig, own_node_id: str):
@@ -187,6 +205,14 @@ class UDPBroadcaster:
         self._listening = False
         self._discovered: Dict[str, NodeInfo] = {}
         self._lock = asyncio.Lock()
+        # 防重放：缓存最近使用的 nonce
+        self._pending_nonces: OrderedDict[str, float] = OrderedDict()
+        self._nonce_ttl: float = config.nonce_ttl
+        self._max_nonces: int = config.nonce_cache_size
+        # 防重放：缓存最近使用的 nonce（request 发出后等待响应的 nonce）
+        self._pending_nonces: OrderedDict[str, float] = OrderedDict()
+        self._nonce_ttl: float = 30.0  # nonce 有效时间（秒）
+        self._max_nonces: int = 100  # 最多缓存 100 个 nonce
 
     async def start(self):
         """启动 UDP 监听"""
@@ -239,19 +265,35 @@ class UDPBroadcaster:
         if not self._transport:
             return
 
+        # 生成 nonce 防重放
+        nonce = secrets.token_hex(16)  # 32 hex chars
+        self._pending_nonces[nonce] = time.time()
+        self._cleanup_nonces()  # 清理过期
+
         msg = {
             "type": "discovery.request",
             "node_id": self.own_node_id,
+            "nonce": nonce,
             "timestamp": int(time.time())
         }
         data = json.dumps(msg).encode('utf-8')
 
-        # 广播到所有网络接口（255.255.255.255）
         try:
             self._transport.sendto(data, ('255.255.255.255', self.config.udp_port))
-            logger.debug(f"Sent discovery request to 255.255.255.255:{self.config.udp_port}")
+            logger.debug(f"Sent discovery request with nonce {nonce[:8]}... to 255.255.255.255:{self.config.udp_port}")
         except Exception as e:
             logger.error(f"Failed to send UDP broadcast: {e}")
+
+    def _cleanup_nonces(self):
+        """清理过期的 pending nonce"""
+        now = time.time()
+        # 删除超时的
+        expired = [n for n, ts in self._pending_nonces.items() if now - ts > self._nonce_ttl]
+        for n in expired:
+            del self._pending_nonces[n]
+        # 限制大小（LRU）
+        while len(self._pending_nonces) > self._max_nonces:
+            self._pending_nonces.popitem(last=False)  # 删除最旧的
 
     def handle_response(self, addr: tuple, data: bytes):
         """
@@ -266,26 +308,44 @@ class UDPBroadcaster:
             if msg.get("type") != "discovery.response":
                 return
 
+            # 验证 nonce 防重放
+            nonce = msg.get("nonce")
+            if not nonce:
+                logger.warning(f"Discovery response missing nonce from {addr}")
+                return
+            if nonce not in self._pending_nonces:
+                logger.warning(f"Discovery response with unknown nonce {nonce[:8]}... from {addr}, possible replay attack")
+                return
+            
+            # 移除已使用 nonce（一次性）
+            del self._pending_nonces[nonce]
+
             node_id = msg.get("node_id")
             ws_address = msg.get("ws_address")
             if not node_id or not ws_address:
-                logger.warning(f"Invalid discovery.response: missing fields")
+                logger.warning(f"Invalid discovery.response: missing node_id or ws_address")
                 return
 
-            # 忽略自己的响应
+            # 忽略自己的响应（理论上不会出现）
             if node_id == self.own_node_id:
                 return
 
             async def add_discovered():
                 async with self._lock:
-                    self._discovered[node_id] = NodeInfo(
-                        node_id=node_id,
-                        address=ws_address,
-                        source="udp",
-                        last_seen=time.time(),
-                        metadata={"udp_addr": addr, "raw": msg}
-                    )
-                    logger.info(f"Discovered node via UDP: {node_id} @ {ws_address}")
+                    # 如果已存在，更新 last_seen
+                    if node_id in self._discovered:
+                        existing = self._discovered[node_id]
+                        existing.last_seen = time.time()
+                        # 地址可能变化？暂不更新，除非配置允许
+                    else:
+                        self._discovered[node_id] = NodeInfo(
+                            node_id=node_id,
+                            address=ws_address,
+                            source="udp",
+                            last_seen=time.time(),
+                            metadata={"udp_addr": addr, "raw": msg}
+                        )
+                        logger.info(f"Discovered node via UDP: {node_id} @ {ws_address} from {addr[0]}:{addr[1]}")
 
             asyncio.create_task(add_discovered())
 
@@ -294,9 +354,36 @@ class UDPBroadcaster:
         except Exception as e:
             logger.error(f"Error handling UDP response: {e}")
 
-    def get_discovered(self) -> Dict[str, NodeInfo]:
-        """获取当前所有发现的节点（副本）"""
-        return self._discovered.copy()
+    def get_discovered(self, ttl: float = None) -> Dict[str, NodeInfo]:
+        """
+        获取当前所有发现的节点（副本）
+
+        Args:
+            ttl: 如果提供，只返回最近 ttl 秒内活跃的节点（清理过期）
+
+        Returns:
+            节点字典副本
+        """
+        now = time.time()
+        result = {}
+        
+        # 清理过期节点（如果设置了 ttl）
+        if ttl is not None:
+            expired = []
+            for node_id, node in self._discovered.items():
+                if now - node.last_seen > ttl:
+                    expired.append(node_id)
+                else:
+                    result[node_id] = node
+            # 清理过期项
+            for node_id in expired:
+                del self._discovered[node_id]
+            if expired:
+                logger.debug(f"Cleaned up {len(expired)} expired discovered nodes")
+        else:
+            result = self._discovered.copy()
+        
+        return result
 
     def clear_discovered(self):
         """清空发现缓存（用于测试）"""
@@ -325,17 +412,21 @@ class NodeRegistry:
     策略：预设优先，UDP 补充
     """
 
-    def __init__(self, loader: KnownNodesLoader, discovery: UDPBroadcaster):
+    def __init__(self, loader: KnownNodesLoader, discovery: UDPBroadcaster, config: DiscoveryConfig = None):
         self.loader = loader
         self.discovery = discovery
+        self.config = config or DiscoveryConfig()
         self._conflict_log: List[Dict] = []
 
-    def get_all_nodes(self) -> List[NodeInfo]:
+    def get_all_nodes(self, include_expired: bool = False) -> List[NodeInfo]:
         """
         获取全部已知节点
 
-        优先级：预设 > 发现
-        冲突处理：如果 node_id 同时存在于两者且地址不同，记录警告，返回预设
+        Args:
+            include_expired: 是否包含过期的发现节点（默认过滤）
+
+        Returns:
+            节点列表（预设优先，UDP 补充）
         """
         nodes = []
         preset_ids = set(self.loader.presets.keys())
@@ -344,8 +435,10 @@ class NodeRegistry:
         for node in self.loader.list_presets():
             nodes.append(node)
 
-        # 添加发现节点（不覆盖预设）
-        discovered = self.discovery.get_discovered()
+        # 获取发现节点（支持 TTL 过滤）
+        ttl = None if include_expired else getattr(self.config, 'discovery_ttl', 60.0)
+        discovered = self.discovery.get_discovered(ttl=ttl)
+
         for node_id, node in discovered.items():
             if node_id in preset_ids:
                 # 冲突检查
@@ -359,8 +452,7 @@ class NodeRegistry:
                     }
                     self._conflict_log.append(conflict)
                     logger.warning(
-                        f"Node {node_id} 地址冲突：预设={preset_node.address} UDP={node.address}，"
-                        f"使用预设"
+                        f"Node {node_id} 地址冲突：预设={preset_node.address} UDP={node.address}，使用预设"
                     )
                 # 跳过 UDP 副本
                 continue
@@ -415,6 +507,6 @@ def create_discovery_components(
 
     loader = KnownNodesLoader(config)
     broadcaster = UDPBroadcaster(config, own_node_id)
-    registry = NodeRegistry(loader, broadcaster)
+    registry = NodeRegistry(loader, broadcaster, config)  # 传入 config
 
     return loader, broadcaster, registry
