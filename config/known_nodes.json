@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "description": "Known nodes for ClawMesh network. This file is loaded by discovery.py.",
+  "bootstrap": [
+    {
+      "node_id": "CL-01S-5f3a1b2c-5a3a-0000-be3400",
+      "address": "ws://localhost:8765",
+      "description": "Local bootstrap node for development",
+      "tags": ["bootstrap", "local"]
+    },
+    {
+      "node_id": "CL-01S-5f3a1b2c-5a3a-0000-cdef01",
+      "address": "ws://192.168.1.100:8765",
+      "description": "Home server bootstrap",
+      "tags": ["bootstrap", "home"]
+    }
+  ],
+  "known_peers": [
+    {
+      "node_id": "CL-01B-5f3a1b2c-5a3a-0000-123456",
+      "address": "ws://localhost:8766",
+      "description": "Local bot node",
+      "tags": ["test", "bot"]
+    },
+    {
+      "node_id": "CL-01S-023db383-b15e-0000600b08",
+      "address": "ws://192.168.1.50:8765",
+      "description": "Friend's node",
+      "tags": ["friend"]
+    }
+  ]
+}
