@@ -25,7 +25,7 @@ import argparse
 import websockets
 
 from adapter.crypto import CryptoManager
-from adapter.node_id import load_or_generate_node_id, generate_node_id
+from adapter.node_id import generate_node_id
 from cryptography.hazmat.primitives import serialization
 
 # 配置日志（UTF-8 safe）
@@ -63,12 +63,18 @@ class ClawMeshServer:
 
     def _load_or_generate_node_id(self) -> str:
         """加载或生成 node_id"""
-        from adapter.node_id import generate_node_id, load_or_generate_node_id
-        # 尝试从 config/node_id.txt 加载
+        from adapter.node_id import generate_node_id
         config_path = Path("config") / "node_id.txt"
         try:
-            return load_or_generate_node_id(str(config_path) if config_path.exists() else None)
-        except:
+            if config_path.exists():
+                return config_path.read_text(encoding='utf-8').strip()
+            else:
+                node_id = generate_node_id()
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(node_id, encoding='utf-8')
+                return node_id
+        except Exception as e:
+            logger.warning(f"Failed to load/generate node_id: {e}, generating new")
             return generate_node_id()
     
     def server_supports_encryption(self) -> bool:
@@ -141,14 +147,15 @@ class ClawMeshServer:
             if client_pubkey_b64 and self.server_supports_encryption():
                 try:
                     client_pubkey_bytes = base64.b64decode(client_pubkey_b64)
+                    logger.info(f"Client pubkey: len={len(client_pubkey_bytes)} bytes, first bytes: {client_pubkey_bytes[:4].hex()}")
                     
                     # 创建 server 端 CryptoManager
                     server_crypto = CryptoManager(self._get_own_node_id())
                     server_crypto.generate_keypair()
                     
                     # 计算共享密钥
-                    server_crypto.compute_shared_secret(client_pubkey_bytes)
-                    server_crypto.derive_encryption_key(server_crypto.compute_shared_secret(client_pubkey_bytes))
+                    shared = server_crypto.compute_shared_secret(client_pubkey_bytes)
+                    server_crypto.derive_encryption_key(shared)
                     
                     # 协商加密模式
                     if client_encryption_mode == "required" and not self.server_supports_encryption():
@@ -165,11 +172,12 @@ class ClawMeshServer:
                     encryption_mode = "required" if self.server_supports_encryption() else "optional"
                     
                     # 指纹验证（可选）
-                    server_fingerprint = server_crypto.compute_fingerprint()
+                    server_fingerprint = server_crypto.fingerprint
+                    logger.info(f"Server fingerprint: {server_fingerprint}")
                     # TODO: 保存 client public key 用于后续验证
                     
                 except Exception as e:
-                    logger.error(f"ECDH handshake failed: {e}")
+                    logger.error(f"ECDH handshake failed: {e}", exc_info=True)
                     await websocket.close(code=1003, reason="Invalid encryption key")
                     return
             else:
@@ -208,15 +216,29 @@ class ClawMeshServer:
 
             # 发送 handshake_ack
             # Phase 3: 如果支持加密，附带 server 公钥和指纹
-            import base64
+            try:
+                if server_crypto:
+                    server_pubkey = server_crypto.key_pair.public_key()
+                    logger.info(f"Server pubkey for ack: has_key_pair={server_crypto.key_pair is not None}")
+                    server_pub_bytes = server_pubkey.public_bytes(
+                        encoding=serialization.Encoding.X962,
+                        format=serialization.PublicFormat.UncompressedPoint
+                    )
+                    logger.info(f"Server pub_bytes for ack: len={len(server_pub_bytes)}, first4={server_pub_bytes[:4].hex()}")
+                    public_key_b64 = base64.b64encode(server_pub_bytes).decode('ascii')
+                    fingerprint = server_crypto.fingerprint
+                else:
+                    public_key_b64 = None
+                    fingerprint = None
+            except Exception as e:
+                logger.error(f"Error preparing ack: {e}", exc_info=True)
+                raise
+            
             ack = {
                 "type": "node.handshake_ack",
                 "node_id": self._get_own_node_id(),
-                "public_key": base64.b64encode(server_crypto.key_pair.public_key().public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.CompressedPoint
-                )).decode('ascii') if server_crypto else None,
-                "fingerprint": server_crypto.compute_fingerprint() if server_crypto else None,
+                "public_key": public_key_b64,
+                "fingerprint": fingerprint,
                 "trusted": True,
                 "encryption_mode": encryption_mode
             }

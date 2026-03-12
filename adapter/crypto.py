@@ -110,10 +110,12 @@ class CryptoManager:
         Raises:
             ValueError: 公钥格式无效
         """
+        logger.info(f"[Crypto] compute_shared_secret: input_len={len(peer_public_key_bytes)}, first4={peer_public_key_bytes[:4].hex() if len(peer_public_key_bytes)>=4 else 'short'}")
         try:
             peer_public_key = ec.EllipticCurvePublicKey.from_encoded_point(CURVE, peer_public_key_bytes)
+            logger.info("[Crypto] Successfully deserialized peer public key")
         except Exception as e:
-            logger.error(f"Failed to deserialize peer public key: {e}")
+            logger.error(f"[Crypto] Failed to deserialize peer public key: {type(e).__name__}: {e}")
             raise ValueError("Invalid peer public key") from e
         
         # 计算 ECDH 共享秘密
@@ -133,6 +135,7 @@ class CryptoManager:
         Returns:
             encryption_key: AES-256 密钥（32 bytes）
         """
+        logger.info(f"[Crypto] derive_encryption_key: shared_secret_len={len(shared_secret)}")
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
@@ -141,7 +144,7 @@ class CryptoManager:
         )
         self.encryption_key = hkdf.derive(shared_secret)
         
-        logger.debug(f"Derived encryption key for {self.node_id}")
+        logger.info(f"[Crypto] Derived encryption key ({len(self.encryption_key)} bytes)")
         return self.encryption_key
     
     def encrypt_message(self, message_plaintext: str) -> Dict[str, Any]:
